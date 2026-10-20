@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "tlg_native_device_resources.h"
+#include "tlg_native_gcn_compiler.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include <vk_mem_alloc.h>
@@ -94,6 +95,30 @@ DeviceResources::~DeviceResources() {
         state_->Destroy(*target);
     }
     state_->color_active.clear();
+}
+
+bool DeviceResources::CreateResourceFreeGraphicsPipelineFromGCN(
+    std::uint64_t guest, const GcnShaderInput& vertex,
+    const Shader::RuntimeInfo& vertex_runtime,
+    const GcnShaderInput& fragment,
+    const Shader::RuntimeInfo& fragment_runtime,
+    const Shader::Profile& profile, std::uint32_t format) {
+    // This path is independent of the game's old PM4 shader selection.
+    // It deliberately cannot bind shaders with unknown texture/buffer
+    // descriptors to the native zero-descriptor Vulkan pipeline layout.
+    if (!guest || !vertex.code_verified || !fragment.code_verified ||
+        vertex.hw_stage != Shader::HwStage::Vertex ||
+        vertex.sw_stage != Shader::SwStage::Vertex ||
+        fragment.hw_stage != Shader::HwStage::Fragment ||
+        fragment.sw_stage != Shader::SwStage::Fragment)
+        return false;
+    auto vs = TranslateVerifiedGcn(vertex, vertex_runtime, profile);
+    if (vs.status != ShaderTranslationStatus::Success)
+        return false;
+    auto fs = TranslateVerifiedGcn(fragment, fragment_runtime, profile);
+    if (fs.status != ShaderTranslationStatus::Success)
+        return false;
+    return CreateGraphicsPipeline(guest, vs.spirv, fs.spirv, format);
 }
 
 bool DeviceResources::CreateGraphicsPipeline(
