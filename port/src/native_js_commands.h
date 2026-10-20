@@ -120,7 +120,7 @@ static inline int tlg_js_native_decode_draw(const TlgJsNativeCommand *record,
     out->instance_count = instanced ? (uint32_t)record->arg1 : 1; /* RDX */
     out->first_index = (uint32_t)(instanced ? record->arg2 : record->arg1);
     out->vertex_base = (uint32_t)(instanced ? record->arg3 : record->arg2);
-    out->flags_or_aux = record->arg4;
+    out->flags_or_aux = instanced ? record->arg4 : record->arg3;
     return 1;
 }
 
