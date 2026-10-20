@@ -27,6 +27,7 @@ struct NativeResource {
     std::uint64_t capacity = 0;  // index elements for buffers
     std::uint64_t write_epoch = 0;
     NativePipelineKind pipeline_kind = NativePipelineKind::None;
+    bool shader_readable = false;
 };
 
 struct NativeContextState {
@@ -85,6 +86,54 @@ public:
     void UnregisterPipeline(std::uint64_t guest) { Remove(pipelines_, guest); }
     void UnregisterIndexBuffer(std::uint64_t guest) { Remove(buffers_, guest); }
     void UnregisterTargetSet(std::uint64_t guest) { Remove(targets_, guest); }
+
+    // Native sampled texture/sampler identity is disjoint from graphics
+    // render-target identity. Uploads must be scheduled in Vulkan order
+    // before the texture can become shader-readable.
+    bool RegisterSampledImage(std::uint64_t guest, std::uint64_t image_view) {
+        return Register(sampled_images_, guest, image_view, 0);
+    }
+    bool RegisterSampler(std::uint64_t guest, std::uint64_t vk_sampler) {
+        if (!Register(samplers_, guest, vk_sampler, 0)) return false;
+        std::scoped_lock lock{mutex_};
+        samplers_[guest].shader_readable = true;
+        return true;
+    }
+    void UnregisterSampledImage(std::uint64_t guest) { Remove(sampled_images_, guest); }
+    void UnregisterSampler(std::uint64_t guest) { Remove(samplers_, guest); }
+
+    bool MarkSampledImageReady(std::uint64_t guest, std::uint64_t expected_view) {
+        std::scoped_lock lock{mutex_};
+        auto it = sampled_images_.find(guest);
+        if (it == sampled_images_.end() ||
+            !expected_view || it->second.vk_handle != expected_view)
+            return false;
+        it->second.shader_readable = true;
+        return true;
+    }
+    struct SampledBinding {
+        std::uint64_t image_view = 0;
+        std::uint64_t sampler = 0;
+        std::uint64_t image_generation = 0;
+        std::uint64_t sampler_generation = 0;
+    };
+    bool TryResolveSampledBinding(std::uint64_t image_guest,
+                                  std::uint64_t sampler_guest,
+                                  SampledBinding& out) const {
+        std::scoped_lock lock{mutex_};
+        const auto image = sampled_images_.find(image_guest);
+        const auto sampler = samplers_.find(sampler_guest);
+        if (image == sampled_images_.end() || sampler == samplers_.end() ||
+            !image->second.shader_readable || !sampler->second.shader_readable)
+            return false;
+        out = {
+            .image_view = image->second.vk_handle,
+            .sampler = sampler->second.vk_handle,
+            .image_generation = image->second.generation,
+            .sampler_generation = sampler->second.generation,
+        };
+        return out.image_view && out.sampler;
+    }
 
     bool Bind(std::uint64_t context, std::uint64_t pipeline,
               std::uint64_t indices, std::uint64_t targets,
@@ -259,7 +308,14 @@ private:
                 return false;
             }
         }
-        table[guest] = {handle, ++generation_, capacity, 0, pipeline_kind};
+        table[guest] = {
+            .vk_handle = handle,
+            .generation = ++generation_,
+            .capacity = capacity,
+            .write_epoch = 0,
+            .pipeline_kind = pipeline_kind,
+            .shader_readable = false,
+        };
         return true;
     }
     void Remove(Table& table, std::uint64_t guest) {
@@ -268,7 +324,7 @@ private:
     }
     mutable std::mutex mutex_;
     std::uint64_t generation_ = 0;
-    Table pipelines_, buffers_, targets_;
+    Table pipelines_, buffers_, targets_, sampled_images_, samplers_;
     std::unordered_map<std::uint64_t, NativeContextState> contexts_;
 };
 } // namespace TlgNativeVk
