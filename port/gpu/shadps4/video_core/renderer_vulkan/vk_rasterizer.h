@@ -18,6 +18,7 @@
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/texture_cache/texture_cache.h"
+#include "tlg_native_device_resources.h"
 
 namespace AmdGpu {
 struct Liverpool;
@@ -516,6 +517,11 @@ private:
         }
         return nullptr;
     }
+    // Independent native Vulkan resources, opt-in only until Js resource hooks
+    // and pipeline equivalence are verified. Defined before draw_pipe so
+    // their GPU allocations retire after in-flight draw work is drained.
+    TlgNativeVk::ResourceRegistry native_resource_registry;
+    std::unique_ptr<TlgNativeVk::DeviceResources> native_device_resources;
     std::unique_ptr<ConstantRing> constant_ring;
     /// Submissions (prepared draws) kept alive until stage B reaches the position.
     std::deque<std::pair<u64, std::shared_ptr<const void>>> pipe_keepalive;
