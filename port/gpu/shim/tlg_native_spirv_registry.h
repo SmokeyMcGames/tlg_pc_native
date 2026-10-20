@@ -68,14 +68,16 @@ public:
         next->key = key;
         next->spirv.assign(spirv.begin(), spirv.end());
         std::scoped_lock lock{mutex_};
-        if (auto it = modules_.find(key.guest_id); it != modules_.end()) {
-            occupied_bytes_ -= it->second->spirv.size() * sizeof(std::uint32_t);
-            modules_.erase(it);
-        }
-        if (bytes > max_bytes_ - occupied_bytes_) {
-            // Refuse the newest entry rather than evict in-use objects or
-            // silently reuse a mismatched specialization.
-            return false;
+        const auto old = modules_.find(key.guest_id);
+        const std::size_t reusable_bytes =
+            old == modules_.end() ? 0 :
+                old->second->spirv.size() * sizeof(std::uint32_t);
+        // Reject the new version BEFORE modifying the previous one.
+        // A failed cache insertion must leave existing working state intact.
+        if (bytes > max_bytes_ - (occupied_bytes_ - reusable_bytes)) return false;
+        if (old != modules_.end()) {
+            occupied_bytes_ -= reusable_bytes;
+            modules_.erase(old);
         }
         next->generation = ++next_generation_;
         occupied_bytes_ += bytes;
