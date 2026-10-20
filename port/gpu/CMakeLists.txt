@@ -542,3 +542,10 @@ add_executable(native-texture-layout-test EXCLUDE_FROM_ALL
     ../tests/test_native_texture_layout.cpp)
 target_compile_features(native-texture-layout-test PRIVATE cxx_std_23)
 target_compile_options(native-texture-layout-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Pure CPU validation of PS4 1D thin RGBA8 microtile detiling.
+# Manual target: no Vulkan ICD, game assets or GitHub workflows required.
+add_executable(native-rgba8-detile-test EXCLUDE_FROM_ALL
+    ../tests/test_native_rgba8_detile.cpp)
+target_compile_features(native-rgba8-detile-test PRIVATE cxx_std_23)
+target_compile_options(native-rgba8-detile-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
