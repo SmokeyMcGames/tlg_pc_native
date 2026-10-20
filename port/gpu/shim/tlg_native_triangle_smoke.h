@@ -12,7 +12,8 @@ public:
     TriangleSmoke(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
                   DeviceResources& resources, ResourceRegistry& registry,
                   bool sampled_texture_test = false,
-                  bool tiled_texture_test = false);
+                  bool tiled_texture_test = false,
+                  bool macro_texture_test = false);
     ~TriangleSmoke();
     TriangleSmoke(const TriangleSmoke&) = delete;
     TriangleSmoke& operator=(const TriangleSmoke&) = delete;
