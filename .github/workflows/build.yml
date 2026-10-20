@@ -6,7 +6,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, experimental/native-vulkan-phase1]
     tags: ['v*']
   # Pull requests to main build both packages (artifacts only): the Release is left untouched.
   pull_request:
@@ -131,7 +131,7 @@ jobs:
   release:
     needs: [linux, windows]
     # Only pushes publish (main -> vYYYY.MM.DD-<commit>, v* tags -> that tag); pull requests stop at the artifacts.
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     runs-on: ubuntu-24.04
     permissions:
       contents: write
