@@ -6,6 +6,7 @@
 #include <cstdint>
 namespace TlgNativeJs {
 struct Stats {
+    std::uint64_t nonindexed{};
     std::uint64_t indexed{};
     std::uint64_t indexed_instanced{};
     std::uint64_t buffer_creates{};
