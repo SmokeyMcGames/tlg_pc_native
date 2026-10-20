@@ -23,7 +23,8 @@ enum {
     TLG_JS_NATIVE_INDEXED = 1,
     TLG_JS_NATIVE_INSTANCED = 2,
     TLG_JS_NATIVE_CREATE_BUFFER = 3,
-    TLG_JS_NATIVE_CREATE_PIXEL_SHADER = 4
+    TLG_JS_NATIVE_CREATE_PIXEL_SHADER = 4,
+    TLG_JS_NATIVE_DRAW = 5
 };
 
 /* Full 64-bit register values; never dereference game pointers in a capture hook. */
@@ -160,6 +161,30 @@ static inline int tlg_js_native_decode_pixel_shader_create(
     out->output_rcx = entry->arg2;
     out->blob_head = entry->arg3;
     out->blob_tail = entry->arg4;
+    return 1;
+}
+
+/* JsDeviceContext::Draw (v01.00 guest+0x1312480), independent of
+ * DrawIndexedCommon/DrawIndexedInstanced:
+ * RDI=context, ESI=vertex count, EDX=firstVertex. GPU index bindings
+ * MUST NOT be required when converting this semantic operation to Vulkan.
+ */
+typedef struct TlgJsNativeNonIndexedCandidate {
+    uint64_t sequence, context;
+    uint32_t vertex_count, first_vertex, instance_count;
+} TlgJsNativeNonIndexedCandidate;
+
+static inline int tlg_js_native_decode_nonindexed(
+    const TlgJsNativeCommand *entry,
+    TlgJsNativeNonIndexedCandidate *out) {
+    if (!entry || !out || !entry->context ||
+        entry->kind != TLG_JS_NATIVE_DRAW)
+        return 0;
+    out->sequence = entry->ready;
+    out->context = entry->context;
+    out->vertex_count = (uint32_t)entry->arg0; /* RSI */
+    out->first_vertex = (uint32_t)entry->arg1; /* RDX */
+    out->instance_count = 1;
     return 1;
 }
 
