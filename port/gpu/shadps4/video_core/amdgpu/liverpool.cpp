@@ -9,6 +9,7 @@
 #include <time.h>
 #include "tlg_copy.h"
 #include "tlg_toggles.h"
+#include "tlg_native_draw_bridge.h"
 #include <cstdio>
 #include <boost/preprocessor/stringize.hpp>
 
