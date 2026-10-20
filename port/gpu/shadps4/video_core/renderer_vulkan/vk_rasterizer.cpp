@@ -75,7 +75,8 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     const char* native_resources = std::getenv("TLG_NATIVE_DEVICE_RESOURCES");
     const char* native_smoke = std::getenv("TLG_NATIVE_GPU_SMOKE");
     const bool smoke = native_smoke && native_smoke[0] == '1' && !native_smoke[1];
-    if ((native_resources && native_resources[0] == '1' && !native_resources[1]) || smoke) {
+    if (!EmulatorSettings.IsNullGPU() &&
+        ((native_resources && native_resources[0] == '1' && !native_resources[1]) || smoke)) {
         native_device_resources =
             std::make_unique<TlgNativeVk::DeviceResources>(instance, native_resource_registry);
         if (smoke) {
@@ -85,10 +86,15 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
                 SmokeResource, 3, 2, triangle_indices, sizeof(triangle_indices));
             std::printf("Native Vulkan resource smoke: %s (host-staged VkBuffer + VMA)\n",
                         allocated ? "PASS" : "FAIL");
-            if (allocated) {
-                native_device_resources->RetireIndexBuffer(SmokeResource);
-                native_device_resources->CollectRetiredAfterIdle();
-            }
+            // Exercise the real native color-image and image-view creation
+            // path too. This remains a resource smoke, NOT a rendered game frame.
+            const bool color = native_device_resources->CreateColorTarget(
+                SmokeResource + 1, 2, 2, VK_FORMAT_R8G8B8A8_UNORM);
+            std::printf("Native Vulkan color-target smoke: %s (VkImage + VkImageView)\n",
+                        color ? "PASS" : "FAIL");
+            if (allocated) native_device_resources->RetireIndexBuffer(SmokeResource);
+            if (color) native_device_resources->RetireColorTarget(SmokeResource + 1);
+            if (allocated || color) native_device_resources->CollectRetiredAfterIdle();
         }
     }
 
