@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Inventory GCN shaders embedded in a legally obtained PS4 eboot.bin.
+"""Inventory GCN shaders from the game's eboot.bin and extracted .sb assets.
 
 No proprietary data is bundled. Default mode writes JSON metadata only.
 --dump-code extracts the raw GCN bytecode into a caller-selected local folder;
@@ -114,50 +114,113 @@ def discover(segments):
     return found
 
 
+def scan_shader_root(root, max_files=250000):
+    """Scan loose .sb assets extracted from the game's PSARC archives.
+
+    This intentionally does NOT attempt to guess PSARC compression or encryption.
+    Every accepted shader still passes the same OrbShdr/code-boundary checks as
+    the embedded ELF shaders.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        raise ValueError(f'--shader-root must be a directory: {root}')
+    assets = []
+    skipped = 0
+    seen = 0
+    for path in sorted(root.rglob('*.sb')):
+        if not path.is_file():
+            continue
+        seen += 1
+        if seen > max_files:
+            raise ValueError(f'more than {max_files} shader files; refusing unbounded scan')
+        size = path.stat().st_size
+        if size < 40 or size > 16 * 1024 * 1024:
+            skipped += 1
+            continue
+        blob = path.read_bytes()
+        matches = discover([(0, blob)])
+        if not matches:
+            skipped += 1
+            continue
+        relative = path.relative_to(root).as_posix()
+        for entry in matches:
+            entry['asset_path'] = relative
+            entry['asset_sha256'] = hashlib.sha256(blob).hexdigest()
+            # File-relative byte offsets are NOT guest virtual addresses.
+            entry['code_file_offset'] = entry.pop('code_guest_offset')
+            entry['binary_info_file_offset'] = entry.pop('binary_info_guest_offset')
+            assets.append(entry)
+    return assets, skipped
+
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('eboot', type=Path, help='own legally obtained game eboot.bin')
+    p.add_argument('eboot', type=Path, nargs='?',
+                   help='optional own legally obtained game eboot.bin')
+    p.add_argument('--shader-root', type=Path,
+                   help='optional root of loose .sb files extracted from PSARC archives')
     p.add_argument('--out', type=Path, help='where to write metadata manifest JSON')
     p.add_argument('--dump-code', type=Path,
                    help='optional local GCN bytecode output folder (never publish these files)')
     p.add_argument('--allow-unknown-build', action='store_true',
                    help='accept unrecognized executable only when each shader validates')
     args = p.parse_args(argv)
-    sha, segments = executable_bytes(args.eboot)
+    if args.eboot is None and args.shader_root is None:
+        p.error('supply eboot.bin, --shader-root, or both')
+
     known = {
         EBOOT_100_SELF_SHA256: '01.00', EBOOT_100_ELF_SHA256: '01.00',
         EBOOT_103_SHA256: '01.03',
     }
-    version = known.get(sha)
-    if not version and not args.allow_unknown_build:
-        p.error('unknown eboot SHA-256; use --allow-unknown-build to scan by metadata')
-    found = discover(segments)
-    if not found:
-        raise ValueError('no validated GCN shader binaries found')
-    serializable = [{k: v for k, v in entry.items() if k != '_code'} for entry in found]
+    sha, version, embedded = None, None, []
+    if args.eboot:
+        sha, segments = executable_bytes(args.eboot)
+        version = known.get(sha)
+        if not version and not args.allow_unknown_build:
+            p.error('unknown eboot SHA-256; use --allow-unknown-build to scan by metadata')
+        embedded = discover(segments)
+
+    assets, skipped = ([], 0)
+    if args.shader_root is not None:
+        assets, skipped = scan_shader_root(args.shader_root)
+    if not embedded and not assets:
+        raise ValueError('no validated GCN shader binaries found in the selected sources')
+
+    def public(records):
+        return [{k: v for k, v in entry.items() if k != '_code'}
+                for entry in records]
+
     manifest = {
-        'schema': 1, 'build_version': version or 'unidentified',
+        'schema': 2, 'build_version': version or 'unidentified',
         'source_sha256': sha,
-        'count': len(found),
-        'embedded_shaders': serializable,
-        'note': 'metadata only; GCN translation to SPIR-V still requires specialization',
+        'count': len(embedded) + len(assets),
+        'embedded_shaders': public(embedded),
+        'asset_shaders': public(assets),
+        'skipped_shader_assets': skipped,
+        'note': 'inventory only; GCN -> SPIR-V still needs resource-specialized translation',
     }
-    text = json.dumps(manifest, indent=2) + '\n'
+    payload = json.dumps(manifest, indent=2) + '\\n'
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
-        args.out.write_text(text, encoding='utf-8')
+        args.out.write_text(payload, encoding='utf-8')
     else:
-        sys.stdout.write(text)
+        sys.stdout.write(payload)
+
     if args.dump_code:
         args.dump_code.mkdir(parents=True, exist_ok=True)
-        for entry in found:
-            name = (f"{entry['stage']}-{entry['code_guest_offset']:08x}-"
+        for entry in embedded + assets:
+            # Include source identity to avoid collisions between eboot and
+            # loose shader entries that share the same byte offset.
+            identity = entry.get('asset_path', 'eboot')
+            source_tag = hashlib.sha256(identity.encode()).hexdigest()[:8]
+            address = entry.get('code_file_offset', entry.get('code_guest_offset', 0))
+            name = (f"{entry['stage']}-{source_tag}-{address:08x}-"
                     f"{entry['sha256'][:12]}.gcn")
             (args.dump_code / name).write_bytes(entry['_code'])
-        print(f'Extracted {len(found)} raw shaders locally: {args.dump_code}',
+        print(f'Extracted {len(embedded)+len(assets)} raw shaders locally: {args.dump_code}',
               file=sys.stderr)
     return 0
-
 
 if __name__ == '__main__':
     sys.exit(main())
