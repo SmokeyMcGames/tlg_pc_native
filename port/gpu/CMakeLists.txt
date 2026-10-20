@@ -512,3 +512,9 @@ add_executable(native-js-pixel-shader-hook-test EXCLUDE_FROM_ALL
     ../tests/test_native_js_pixel_shader_hook.c)
 target_compile_features(native-js-pixel-shader-hook-test PRIVATE c_std_11)
 target_compile_options(native-js-pixel-shader-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Driver- and specialization-keyed pretranslated SPIR-V cache regression.
+add_executable(native-spirv-registry-test EXCLUDE_FROM_ALL
+    ../tests/test_native_spirv_registry.cpp)
+target_compile_features(native-spirv-registry-test PRIVATE cxx_std_23)
+target_compile_options(native-spirv-registry-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
