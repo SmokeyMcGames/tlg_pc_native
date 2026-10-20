@@ -842,6 +842,28 @@ static void tlg_js_instanced_entry(void) {
 }
 #endif
 
+/* GPU-thread consumer for semantic Js calls. It copies no guest-owned
+ * structures: these are integer/register observations only. A later native
+ * Vulkan backend must still resolve and validate pipeline/resource objects.
+ */
+static int tlg_js_native_gpu_poll(void *context, TlgJsNativeDrawCandidate *out,
+                                  uint64_t *dropped_now) {
+    static uint64_t read_cursor, all_dropped;
+    const uint64_t previous_drops = all_dropped;
+    TlgJsNativeRing *ring = context;
+    TlgJsNativeCommand raw;
+    if (dropped_now) *dropped_now = 0;
+    if (!ring || !out || !dropped_now) return 0;
+    while (tlg_js_native_read_next(ring, &read_cursor, &raw, &all_dropped)) {
+        if (tlg_js_native_decode_draw(&raw, out)) {
+            *dropped_now = all_dropped - previous_drops;
+            return 1;
+        }
+    }
+    *dropped_now = all_dropped - previous_drops;
+    return 0;
+}
+
 static void install_js_native_trace(const char *app0, Segment *segments,
                                      uint64_t count, uint64_t size) {
     const char *enabled = getenv("TLG_JS_NATIVE_TRACE");
@@ -889,6 +911,7 @@ static void install_js_native_trace(const char *app0, Segment *segments,
     tlg_js_write_absolute_jump(image + indexed, (uintptr_t)tlg_js_indexed_entry);
     tlg_js_write_absolute_jump(image + instanced, (uintptr_t)tlg_js_instanced_entry);
     tlg_js_trace_enabled = 1;
+    tlggpu_set_native_js_draw_source(tlg_js_native_gpu_poll, &tlg_js_native_ring);
     runtime_set_report_hook(isa_report_hook);
     printf("Js native bridge: v01.00 DrawIndexedCommon at +0x%llx and "
            "DrawIndexedInstanced at +0x%llx intercepted (read-only; originals run)\n",
