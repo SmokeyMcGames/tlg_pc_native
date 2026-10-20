@@ -7,7 +7,6 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
-#include "video_core/renderer_vulkan/vk_shader_util.h"
 #include <vk_mem_alloc.h>
 #include <array>
 #include <cstdio>
@@ -21,7 +20,6 @@ constexpr std::uint64_t SmokePipelineId = 0xfffffffffffe1002ull;
 constexpr std::uint64_t SmokeIndexId = 0xfffffffffffe1003ull;
 constexpr std::uint64_t SmokeContextId = 0xfffffffffffe1004ull;
 constexpr vk::Extent2D SmokeSize{64, 64};
-constexpr vk::Format SmokeFormat = vk::Format::eR8G8B8A8Unorm;
 }
 struct TriangleSmoke::State {
     const Vulkan::Instance& instance;
