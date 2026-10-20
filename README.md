@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://github.com/HayatoG/tlg_pc/releases/latest">Download</a> ·
-  <a href="https://discord.gg/UMkdMYZh9g">Discord</a>
+  <a href="https://discord.gg/v6pFG5SqG7">Discord</a>
 </p>
 
 # The Last Guardian — native PC port
