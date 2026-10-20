@@ -58,6 +58,20 @@ public:
     bool QueryGraphicsPipeline(std::uint64_t guest_id,
                                std::uint64_t& vk_handle) const;
 
+    // Dedicated, descriptor-free native Vulkan compute pipeline. Compute
+    // handles are type-tagged and cannot pass graphics draw validation.
+    bool CreateComputePipeline(std::uint64_t guest_id,
+                               std::span<const std::uint32_t> compute_spirv);
+    bool CreateResourceFreeComputePipelineFromGCN(
+        std::uint64_t guest_id, const GcnShaderInput& compute,
+        const Shader::RuntimeInfo& runtime, const Shader::Profile& profile);
+    bool CreateComputePipelineFromCachedSpirv(
+        std::uint64_t guest_id, const NativeShaderRegistry& shader_cache,
+        const NativeShaderKey& compute_key);
+    void RetireComputePipeline(std::uint64_t guest_id);
+    bool QueryComputePipeline(std::uint64_t guest_id,
+                              std::uint64_t& vk_handle) const;
+
     bool CreateIndexBuffer(std::uint64_t guest_id, std::uint64_t index_count,
                            std::uint32_t index_width, const void* initial_data,
                            std::size_t initial_bytes);
