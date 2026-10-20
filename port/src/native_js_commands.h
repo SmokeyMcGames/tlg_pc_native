@@ -22,7 +22,8 @@
 enum {
     TLG_JS_NATIVE_INDEXED = 1,
     TLG_JS_NATIVE_INSTANCED = 2,
-    TLG_JS_NATIVE_CREATE_BUFFER = 3
+    TLG_JS_NATIVE_CREATE_BUFFER = 3,
+    TLG_JS_NATIVE_CREATE_PIXEL_SHADER = 4
 };
 
 /* Full 64-bit register values; never dereference game pointers in a capture hook. */
@@ -128,6 +129,37 @@ static inline int tlg_js_native_decode_buffer_create(
     out->usage = (uint32_t)(record->arg3 >> 32);
     out->bind_flags = (uint32_t)record->arg4;
     out->cpu_access_flags = (uint32_t)(record->arg4 >> 32);
+    return 1;
+}
+
+/* The CreatePixelShader source pointer is captured at function entry;
+ * recording its first 16 bytes avoids dereferencing a potentially expired
+ * source blob on the GPU thread. ShaderBinaryInfo, its stage resource table,
+ * final output object lifetime and any SPIR-V specialization are NOT known
+ * from this event. It is telemetry, not permission to submit a native draw.
+ */
+typedef struct TlgJsNativeShaderCreateCandidate {
+    uint64_t sequence;
+    uint64_t device;
+    uint64_t shader_blob;    /* original RSI; opaque after return */
+    uint64_t input_rdx;      /* stage-specific argument; not yet interpreted */
+    uint64_t output_rcx;     /* pointer to game-owned result; not dereferenced */
+    uint64_t blob_head;      /* copy of bytes +0..+7 at entry */
+    uint64_t blob_tail;      /* copy of bytes +8..+15 at entry */
+} TlgJsNativeShaderCreateCandidate;
+
+static inline int tlg_js_native_decode_pixel_shader_create(
+    const TlgJsNativeCommand *entry, TlgJsNativeShaderCreateCandidate *out) {
+    if (!entry || !out || !entry->context ||
+        entry->kind != TLG_JS_NATIVE_CREATE_PIXEL_SHADER)
+        return 0;
+    out->sequence = entry->ready;
+    out->device = entry->context;
+    out->shader_blob = entry->arg0;
+    out->input_rdx = entry->arg1;
+    out->output_rcx = entry->arg2;
+    out->blob_head = entry->arg3;
+    out->blob_tail = entry->arg4;
     return 1;
 }
 
