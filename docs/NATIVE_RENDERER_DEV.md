@@ -10,13 +10,14 @@ the old Gnm/PM4 decoder is still the source of Vulkan resource and shader state.
 ### Game-level API capture (PS4 GPU encoding bypass point)
 
 - `port/src/probe.c`: for the verified **v01.00** executable only,
-  two JsDeviceContext draw hooks, a `JsDevice::CreateBuffer` hook and a
-  `JsDevice::CreatePixelShader` hook, each signature-checked before patching.
-  The original guest routines still run; all original argument and vector
-  registers are preserved by the interception stubs.
+  six signature-checked high-level entry hooks: indexed draw, instanced
+  indexed draw, non-indexed Draw, PrepareDraw, `JsDevice::CreateBuffer`
+  and `JsDevice::CreatePixelShader`. Their original guest routines
+  still run; the interception preserves the incoming integer, SIMD and
+  flags state before jumping through the original prologues.
 - `port/src/native_js_commands.h`: a bounded 4,096-entry command stream
-  captures indexed draws, instanced draws, buffer creation and pixel-shader
-  creation BEFORE PM4 encoding. Buffer-description and shader-header snapshots
+  captures ordinary Draw, indexed draws, instanced indexed draws, PrepareDraw,
+  buffer creation and pixel-shader creation BEFORE PM4 encoding. Buffer-description and shader-header snapshots
   are taken at function entry, when their pointers are still live.
 - The GPU-side consumer never follows game pointers. It retains only
   immutable integer/header observations and counts dropped/invalid entries.
@@ -38,6 +39,30 @@ Disassembly of the original v01.00 executable confirms:
   different register assignments. The native semantic decoder now treats
   those operations separately. The Vulkan binding offset is subtracted
   from the game's index offset and its remaining capacity checked.
+
+### Game-level nonindexed draw and PrepareDraw state mapping
+
+The original v01.00 executable was independently disassembled for two
+additional high-level render calls:
+
+- `JsDeviceContext::Draw` at guest image `0x1312480`: first 18
+  relocation-free bytes are a verified trampoline; the original ESI is the
+  vertex count and EDX is the starting vertex index. The native nonindexed
+  registry path does not require any index buffer, but **does** require
+  independently validated vertex fetch and GPU barriers.
+- `JsDeviceContext::PrepareDraw` at guest `0x13143e0`: first 24
+  relocation-free bytes are a verified trampoline. The snapshot copies the
+  three shader-related context slots at +`0x4678`, +`0x4680`, and
+  +`0x4688`, plus the original RSI/RDX arguments. These values are
+  **opaque guest state**, not safe Vulkan handles.
+- `tlg_js_prepare_match.h` pairs each Draw/DrawIndexed event with the next
+  PrepareDraw snapshot of that **same** game context. Captured event loss
+  invalidates pending pairs, notifies diagnostics and never triggers a Vulkan
+  submission. A matched pair is **not proof PrepareDraw succeeded** or
+  that the game eventually submitted that draw.
+- Synthetic execution of both new trampolines passed GCC/Clang -O2 local
+  tests and the 18- and 24-byte prologues exactly match the supplied v01.00
+  executable. Full Windows integration and shader binding are unverified.
 
 ### Actual native Vulkan resource allocation
 
@@ -107,6 +132,12 @@ Pure CPU-side tests are in `port/tests/`:
   indexed-buffer offset math and invalidation on object replacement
 - `test_native_js_pixel_shader_hook.c`: synthetic v01.00 PixelShader
   trampoline, copied header and SysV ABI preservation
+- `test_native_js_draw_hook.c`: v01.00 ordinary nonindexed Draw entry
+  trampoline and captured vertex-count semantics
+- `test_native_js_prepare_draw.c`: high-level PrepareDraw stack-preserving
+  trampoline and opaque shader-slot state snapshots
+- `test_native_js_prepare_match.cpp`: game context pairing and event-loss
+  invalidation, with no Vulkan driver
 - `test_native_spirv_registry.cpp`: shader cache key matching, replacement
   generations, budget refusal and nonblocking retained lifetime
 - `test_native_shader_inventory.py`: synthetic embedded and extracted
@@ -116,7 +147,9 @@ For a configured native build these are standalone Ninja targets
 `native-js-command-test`, `native-js-shadow-test`,
 `native-vk-draw-test`, `native-js-to-vk-test`,
 `native-vk-resources-test`, `native-js-pixel-shader-hook-test`,
-and `native-spirv-registry-test`. They do not use
+and `native-spirv-registry-test`, plus
+`native-js-draw-hook-test`, `native-js-prepare-draw-test`, and
+`native-js-prepare-match-test`. They do not use
 shaders, game assets, or graphics-driver initialization.
 
 The Vulkan command encoder and register-capture ring were checked locally
