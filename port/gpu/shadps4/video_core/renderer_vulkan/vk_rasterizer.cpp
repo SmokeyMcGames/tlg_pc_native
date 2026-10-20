@@ -1378,9 +1378,10 @@ void Rasterizer::DispatchRecord(const ComputePipeline* pipeline) {
     if (FrameCapture::Active()) {
         FrameCapture::Dispatch(cs.pgm_hash, dim_x, dim_y, dim_z);
     }
+    const TlgNativeVk::Dispatch dispatch{dim_x, dim_y, dim_z};
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
-        cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, handle);
-        cmdbuf.dispatch(dim_x, dim_y, dim_z);
+        TlgNativeVk::EmitComputeDispatch(cmdbuf, vk::PipelineBindPoint::eCompute,
+                                         handle, dispatch);
     });
     DebugState.IncDispatch();
 
