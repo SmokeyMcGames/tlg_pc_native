@@ -27,7 +27,7 @@ extern "C" int supply(void *userdata, TlgJsNativeDrawCandidate *out,
 }
 struct EventFixture {
     unsigned next = 0;
-    TlgJsNativeCommand commands[4] = {
+    TlgJsNativeCommand commands[6] = {
         {.ready=1, .kind=TLG_JS_NATIVE_CREATE_BUFFER,
          .context=0x111, .arg0=0x222, .arg1=0x333, .arg2=0x444,
          .arg3=(std::uint64_t{2} << 32) | 4096,
@@ -38,14 +38,19 @@ struct EventFixture {
          .context=0x555, .arg0=18, .arg1=2, .arg2=3, .arg3=4},
         {.ready=4, .kind=TLG_JS_NATIVE_CREATE_PIXEL_SHADER,
          .context=0x900, .arg0=0x901, .arg1=0x902, .arg2=0x903,
-         .arg3=0x1122334455667788ull, .arg4=0x99aabbccddeeff00ull}
+         .arg3=0x1122334455667788ull, .arg4=0x99aabbccddeeff00ull},
+        {.ready=5, .kind=TLG_JS_NATIVE_DRAW,
+         .context=0x555, .arg0=6, .arg1=2},
+        {.ready=6, .kind=TLG_JS_NATIVE_PREPARE_DRAW,
+         .context=0x555, .arg0=0x12340, .arg1=0x22340, .arg2=0x32340,
+         .arg3=0, .arg4=1}
     };
 };
 extern "C" int supply_events(void *userdata, TlgJsNativeCommand *out,
                               std::uint64_t *dropped) {
     auto* f = static_cast<EventFixture*>(userdata);
     *dropped = 0;
-    if (f->next >= 4) return 0;
+    if (f->next >= 6) return 0;
     *out = f->commands[f->next++];
     return 1;
 }
@@ -72,6 +77,11 @@ int main() {
     tlggpu_set_native_js_event_source(&supply_events, &events);
     TlgNativeJs::PumpOnGpuSubmission();
     const auto native = TlgNativeJs::Snapshot();
+    assert(native.nonindexed == 1);
+    assert(native.prepare_draws == 1);
+    assert(native.shader_slot_4678 == 0x12340);
+    assert(native.shader_slot_4680 == 0x22340);
+    assert(native.shader_slot_4688 == 0x32340);
     assert(native.indexed == 1);
     assert(native.indexed_instanced == 1);
     assert(native.buffer_creates == 1);
@@ -84,7 +94,7 @@ int main() {
     assert(native.last_buffer_bind_flags == 4);
     assert(native.last_buffer_cpu_access == 8);
     assert(native.invalid == 0);
-    assert(native.last_sequence == 4);
+    assert(native.last_sequence == 6);
     TlgNativeJs::ResetForTest();
     std::puts("GPU native Js semantic collector PASS");
     return 0;
