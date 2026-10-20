@@ -721,6 +721,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         ScanDcb(dcb, dcb_depth);
     }
 
+    TlgNativeDraw::Get().ReportIfDue();
     cblock.Reset();
 
     // TODO: potentially, ASCs also can depend on CE and in this case the
@@ -959,8 +960,15 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 }
                 const auto cmd_address = reinterpret_cast<const void*>(header);
                 const auto* prepared = draw_prep ? draw_prep->NextDraw() : nullptr;
-                rasterizer->ScopeMarker("gfx:{}:DrawIndexAuto", fmt::make_format_args(cmd_address),
-                                        [&] { rasterizer->Draw(false, 0, prepared); });
+                // Validated high-level hint: invoke the Vulkan rasterizer directly.
+                // Unknown/modified commands continue through the original scoped path.
+                if (count == TlgNativeDraw::Bridge::PacketWords &&
+                    TlgNativeDraw::Get().TryTake(reinterpret_cast<const u32*>(header))) {
+                    rasterizer->Draw(false, 0, prepared);
+                } else {
+                    rasterizer->ScopeMarker("gfx:{}:DrawIndexAuto", fmt::make_format_args(cmd_address),
+                                            [&] { rasterizer->Draw(false, 0, prepared); });
+                }
                 break;
             }
             case PM4ItOpcode::DrawIndirect: {
