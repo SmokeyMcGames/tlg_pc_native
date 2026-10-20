@@ -7,6 +7,7 @@
 // remain opt-in until resource and framebuffer parity are established.
 #include "tlg_native_vk_resources.h"
 #include "tlg_native_texture_layout.h"
+#include "tlg_native_rgba8_detile.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -110,6 +111,15 @@ public:
     bool CreateSampledTextureRGBA8(
         std::uint64_t guest_id, std::uint32_t width, std::uint32_t height,
         const void* source, std::uint64_t source_row_pitch,
+        std::uint64_t source_available_bytes);
+    // PS4 1D thin microtiled 32bpp RGBA8, verified surface pitch and
+    // padded height only. Detile in a private CPU buffer before Vulkan
+    // staging. Macro-tiled, swizzled banks, compressed images and mips are
+    // deliberately not supported by this entry point.
+    bool CreateSampledTexture1DTiledRgba8(
+        std::uint64_t guest_id, std::uint32_t width, std::uint32_t height,
+        std::uint32_t tiled_pitch, std::uint32_t tiled_height,
+        Rgba8Tiling tile_mode, const void* source,
         std::uint64_t source_available_bytes);
     bool RecordSampledTextureUpload(std::uint64_t guest_id,
                                     Vulkan::Scheduler& scheduler);
