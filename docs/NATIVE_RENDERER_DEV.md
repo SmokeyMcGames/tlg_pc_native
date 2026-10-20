@@ -138,6 +138,10 @@ Pure CPU-side tests are in `port/tests/`:
   trampoline and opaque shader-slot state snapshots
 - `test_native_js_prepare_match.cpp`: game context pairing and event-loss
   invalidation, with no Vulkan driver
+- `test_native_texture_layout.cpp`: size-checked RGBA8 staging, padded row
+  copies, and monotonic Vulkan texture upload/retirement state transitions
+- `test_native_vk_resources.cpp`: additionally covers texture/sampler
+  generation invalidation and shader-readiness requirements
 - `test_native_spirv_registry.cpp`: shader cache key matching, replacement
   generations, budget refusal and nonblocking retained lifetime
 - `test_native_shader_inventory.py`: synthetic embedded and extracted
@@ -218,6 +222,45 @@ The smoke shader, descriptor layout, pipeline and buffer are synthetic; they
 do **not** translate the game's compute effects. The path is opt-in because
 its one-shot readback calls `Scheduler::Finish()`. Its GPU result and
 Windows build have **not** yet been verified.
+
+## Independent sampled-texture and sampler ownership
+
+The native Vulkan resource manager now implements a first usable
+**texture-to-fragment-shader descriptor path**, completely independent of
+PM4 texture-binding packets:
+
+- `tlg_native_texture_layout.h` accepts verified **linear RGBA8, 2D,
+  one-mip-level** texture data. It validates width, height, row pitch,
+  staging-size bounds and copies padded rows to a tight private buffer.
+  PS4 tiled/swizzled data, compressed formats, array textures, depth
+  textures and unverified mip layouts are rejected rather than guessed.
+- `DeviceResources::CreateSampledTextureRGBA8` allocates an optimal-tiled
+  Vulkan image, an image view and host-visible transfer staging. It
+  copies source bytes immediately; the original guest pointer is never
+  retained by the GPU recording thread.
+- `RecordSampledTextureUpload` records host-write-to-transfer-read,
+  undefined-to-transfer-destination and transfer-write-to-shader-read
+  barriers around `vkCmdCopyBufferToImage` on the existing Vulkan scheduler.
+  A texture is bindable only after those commands are enqueued in order.
+- `ResourceRegistry` maintains separate image-view and sampler generation
+  IDs, explicit shader-readiness state, and rejects stale/replaced resources.
+  `DeviceResources` owns nearest/clamp VkSamplers independently of PM4
+  sampler decoding and defers physical destruction until the GPU is idle.
+- `CreateGraphicsPipeline` accepts explicit descriptor layouts for sampled
+  images, samplers, storage images or storage buffers. No guessed binding
+  numbers are accepted.
+- The hidden **`TLG_NATIVE_VULKAN_TEXTURE=1`** option enables a synthetic
+  4×4 solid-color texture shader in the existing offscreen indexed-triangle
+  test (it supersedes the gradient triangle when both are set). The
+  pipeline uses two push descriptors, a Vulkan image upload and
+  `vkCmdDrawIndexed`, then copies the 64×64 result to CPU memory and checks
+  for RGBA approximately `16,64,128,255`. Nothing is presented in the
+  game's swapchain.
+
+**Local validation:** The portable row-pitch/lifetime state tests passed
+with GCC and Clang. The full Vulkan-device and Windows-game versions of
+this path have **not** been built or run on a real GPU here. It is a
+standalone native rendering proof, not the game's material system.
 
 ## Native GCN shader translation and reuse
 
