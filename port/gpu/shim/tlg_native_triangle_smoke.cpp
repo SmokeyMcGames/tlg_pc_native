@@ -25,6 +25,7 @@ struct TriangleSmoke::State {
     vk::UniquePipelineLayout layout;
     vk::UniquePipeline pipeline;
     vk::ImageView color_view{};
+    bool target_created = false;
     bool initialized = false;
     bool emitted = false;
 };
@@ -33,9 +34,12 @@ TriangleSmoke::TriangleSmoke(const Vulkan::Instance& instance,
                               Vulkan::Scheduler& scheduler, DeviceResources& resources)
     : state_{std::make_unique<State>(instance, scheduler, resources)} {}
 TriangleSmoke::~TriangleSmoke() {
-    if (!state_->initialized) return;
-    // Keep the pipeline and target alive until submitted native draws finish.
-    (void)state_->instance.GetDevice().waitIdle();
+    if (!state_->target_created) return;
+    // A deferred Scheduler::Record() closure may not have reached the GPU yet.
+    // Finish recording and wait for execution before destroying pipeline/image.
+    // This only happens for the opt-in native smoke at teardown.
+    state_->scheduler.EndRendering();
+    state_->scheduler.Finish();
     state_->pipeline.reset();
     state_->layout.reset();
     state_->resources.RetireColorTarget(SmokeTargetId);
@@ -48,6 +52,7 @@ bool TriangleSmoke::Init() {
                                                SmokeSize.height,
                                                VK_FORMAT_R8G8B8A8_UNORM))
         return false;
+    state_->target_created = true;
     DeviceResources::ColorTargetInfo target{};
     if (!state_->resources.QueryColorTarget(SmokeTargetId, target)) return false;
     VkImageView raw_view = VK_NULL_HANDLE;
@@ -131,9 +136,11 @@ bool TriangleSmoke::Init() {
 
 bool TriangleSmoke::RecordOnce() {
     if (!state_->initialized || state_->emitted) return false;
+    // Vulkan forbids changing an attachment image's layout while another
+    // dynamic rendering instance is active. End the guest's current pass first.
+    state_->scheduler.EndRendering();
     if (!state_->resources.RecordColorAttachmentTransition(SmokeTargetId, state_->scheduler))
         return false;
-    state_->scheduler.EndRendering();
     const auto pipeline = *state_->pipeline;
     const auto color = state_->color_view;
     state_->scheduler.Record([pipeline,color](vk::CommandBuffer cmd) {
