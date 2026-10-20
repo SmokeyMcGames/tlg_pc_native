@@ -36,7 +36,8 @@ class NativeShaderInventoryTests(unittest.TestCase):
     def test_invalid_metadata_never_extracts_code(self):
         blob, _ = synthetic_shader()
         bad = bytearray(blob)
-        bad[-24:-20] = struct.pack('<I', (8192 << 8) | (4 << 2))
+        struct.pack_into('<I', bad, len(inv.GCN_HEADER) + 40 + 20 + 8,
+                         (8192 << 8) | (4 << 2))
         self.assertEqual(inv.discover([(0, bytes(bad))]), [])
         self.assertEqual(inv.discover([(0, bytes(bad[:-5]))]), [])
 
