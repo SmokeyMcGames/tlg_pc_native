@@ -24,7 +24,8 @@ enum {
     TLG_JS_NATIVE_INSTANCED = 2,
     TLG_JS_NATIVE_CREATE_BUFFER = 3,
     TLG_JS_NATIVE_CREATE_PIXEL_SHADER = 4,
-    TLG_JS_NATIVE_DRAW = 5
+    TLG_JS_NATIVE_DRAW = 5,
+    TLG_JS_NATIVE_PREPARE_DRAW = 6
 };
 
 /* Full 64-bit register values; never dereference game pointers in a capture hook. */
@@ -88,6 +89,31 @@ static inline int tlg_js_native_read_next(const TlgJsNativeRing *ring,
     if (__atomic_load_n(&record->ready, __ATOMIC_ACQUIRE) != wanted) return 0;
     *out = current;
     ++*cursor;
+    return 1;
+}
+
+/* Capture the three shader-related native context slots read at the start
+ * of v01.00 PrepareDraw, plus the original RSI/RDX arguments. Values remain
+ * opaque until JsBuffer/JsShader object layouts have been verified.
+ */
+typedef struct TlgJsNativePrepareDrawCandidate {
+    uint64_t sequence, context;
+    uint64_t shader_slot_4678, shader_slot_4680, shader_slot_4688;
+    uint64_t arg_rsi, arg_rdx;
+} TlgJsNativePrepareDrawCandidate;
+
+static inline int tlg_js_native_decode_prepare_draw(
+    const TlgJsNativeCommand* event, TlgJsNativePrepareDrawCandidate* out) {
+    if (!event || !out || !event->context ||
+        event->kind != TLG_JS_NATIVE_PREPARE_DRAW)
+        return 0;
+    out->sequence = event->ready;
+    out->context = event->context;
+    out->shader_slot_4678 = event->arg0;
+    out->shader_slot_4680 = event->arg1;
+    out->shader_slot_4688 = event->arg2;
+    out->arg_rsi = event->arg3;
+    out->arg_rdx = event->arg4;
     return 1;
 }
 
