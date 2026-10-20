@@ -101,7 +101,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
         }
         if (triangle) {
             native_triangle_smoke = std::make_unique<TlgNativeVk::TriangleSmoke>(
-                instance, scheduler, *native_device_resources);
+                instance, scheduler, *native_device_resources, native_resource_registry);
             if (!native_triangle_smoke->Init()) {
                 std::puts("Native Vulkan offscreen triangle: pipeline/resource initialization FAILED");
                 native_triangle_smoke.reset();
