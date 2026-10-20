@@ -57,6 +57,9 @@ extern volatile uintptr_t tlg_js_trace_last_context;
 extern volatile uintptr_t tlg_js_trace_last_arg1;
 extern volatile uintptr_t tlg_js_trace_last_arg2;
 extern volatile uintptr_t tlg_js_trace_last_arg3;
+extern volatile uintptr_t tlg_js_trace_instanced_last_arg1;
+extern volatile uintptr_t tlg_js_trace_instanced_last_arg2;
+extern volatile uintptr_t tlg_js_trace_instanced_last_arg3;
 static int tlg_js_trace_enabled;
 /* The existing freeze-monitor thread polls this without touching guest memory.
  * Reports every 5s so the high-level interception can be verified in live gameplay.
@@ -69,14 +72,17 @@ void tlg_js_trace_report_tick(uint64_t now_ms) {
     const uint64_t instanced = __atomic_load_n(&tlg_js_trace_instanced_calls, __ATOMIC_RELAXED);
     if (last_ms)
         printf("Js native bridge: DrawIndexedCommon +%llu, DrawIndexedInstanced +%llu / 5s; "
-               "totals %llu/%llu; indexed ctx=%p rsi=%p rdx=%p rcx=%p\n",
+               "totals %llu/%llu; indexed ctx=%p rsi=%p rdx=%p rcx=%p; instanced rsi=%p rdx=%p rcx=%p\n",
                (unsigned long long)(calls - last_count),
                (unsigned long long)(instanced - last_instanced),
                (unsigned long long)calls, (unsigned long long)instanced,
                (void *)__atomic_load_n(&tlg_js_trace_last_context, __ATOMIC_RELAXED),
                (void *)__atomic_load_n(&tlg_js_trace_last_arg1, __ATOMIC_RELAXED),
                (void *)__atomic_load_n(&tlg_js_trace_last_arg2, __ATOMIC_RELAXED),
-               (void *)__atomic_load_n(&tlg_js_trace_last_arg3, __ATOMIC_RELAXED));
+               (void *)__atomic_load_n(&tlg_js_trace_last_arg3, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_instanced_last_arg1, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_instanced_last_arg2, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_instanced_last_arg3, __ATOMIC_RELAXED));
     last_ms = now_ms;
     last_count = calls;
     last_instanced = instanced;
@@ -753,6 +759,9 @@ __attribute__((used)) uintptr_t tlg_js_indexed_gateway;
 __attribute__((used)) uintptr_t tlg_js_instanced_gateway;
 __attribute__((used)) volatile uint64_t tlg_js_trace_instanced_calls;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_context;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_arg1;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_arg2;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_arg3;
 __attribute__((used)) volatile uint64_t tlg_js_trace_indexed_calls;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_context;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg1;
@@ -782,6 +791,9 @@ static void tlg_js_instanced_entry(void) {
         "pushfq\n\t"
         "lock incq tlg_js_trace_instanced_calls(%rip)\n\t"
         "movq %rdi, tlg_js_trace_instanced_last_context(%rip)\n\t"
+        "movq %rsi, tlg_js_trace_instanced_last_arg1(%rip)\n\t"
+        "movq %rdx, tlg_js_trace_instanced_last_arg2(%rip)\n\t"
+        "movq %rcx, tlg_js_trace_instanced_last_arg3(%rip)\n\t"
         "popfq\n\t"
         "jmp *tlg_js_instanced_gateway(%rip)\n\t"
     );
