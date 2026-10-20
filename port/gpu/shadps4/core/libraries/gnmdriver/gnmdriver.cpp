@@ -24,6 +24,7 @@
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "tlg_freeze.h"
+#include "tlg_native_draw_bridge.h"
 
 extern Frontend::WindowSDL* g_window;
 std::unique_ptr<Vulkan::Presenter> presenter;
@@ -484,6 +485,8 @@ s32 PS4_SYSV_ABI sceGnmDrawIndexAuto(u32* cmdbuf, u32 size, u32 index_count, u32
             cmdbuf, PM4ShaderType::ShaderGraphics, index_count,
             sceKernelIsNeoMode() ? flags & 0xe0000000u | 2u : 2u);
         WriteTrailingNop<3>(cmdbuf);
+        // Hint only: the original game command stays unchanged and remains the fallback.
+        TlgNativeDraw::Get().Publish(cmdbuf - 3);
         return ORBIS_OK;
     }
     return -1;
