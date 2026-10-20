@@ -69,6 +69,29 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     }
     memory->SetRasterizer(this);
 
+    // An actual Vulkan allocation owner for the native Js rendering path.
+    // Experimental only: no guest resources are substituted until both the
+    // guest JsDevice object lifecycle and GPU synchronization are validated.
+    const char* native_resources = std::getenv("TLG_NATIVE_DEVICE_RESOURCES");
+    const char* native_smoke = std::getenv("TLG_NATIVE_GPU_SMOKE");
+    const bool smoke = native_smoke && native_smoke[0] == '1' && !native_smoke[1];
+    if ((native_resources && native_resources[0] == '1' && !native_resources[1]) || smoke) {
+        native_device_resources =
+            std::make_unique<TlgNativeVk::DeviceResources>(instance, native_resource_registry);
+        if (smoke) {
+            constexpr std::uint16_t triangle_indices[] = {0, 1, 2};
+            constexpr std::uint64_t SmokeResource = 0xfffffffffffffff0ull;
+            const bool allocated = native_device_resources->CreateIndexBuffer(
+                SmokeResource, 3, 2, triangle_indices, sizeof(triangle_indices));
+            std::printf("Native Vulkan resource smoke: %s (host-staged VkBuffer + VMA)\n",
+                        allocated ? "PASS" : "FAIL");
+            if (allocated) {
+                native_device_resources->RetireIndexBuffer(SmokeResource);
+                native_device_resources->CollectRetiredAfterIdle();
+            }
+        }
+    }
+
     GpuProfiler::Init(instance, scheduler);
     if (DrawPipeWanted()) {
         constant_ring = std::make_unique<ConstantRing>(instance, scheduler);
