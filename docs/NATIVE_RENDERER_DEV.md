@@ -10,14 +10,18 @@ the old Gnm/PM4 decoder is still the source of Vulkan resource and shader state.
 ### Game-level API capture (PS4 GPU encoding bypass point)
 
 - `port/src/probe.c`: for the verified **v01.00** executable only,
-  six signature-checked high-level entry hooks: indexed draw, instanced
-  indexed draw, non-indexed Draw, PrepareDraw, `JsDevice::CreateBuffer`
-  and `JsDevice::CreatePixelShader`. Their original guest routines
+  seven signature-checked high-level entry hooks: indexed draw,
+  instanced indexed draw, non-indexed Draw, PrepareDraw,
+  `JsDevice::CreateBuffer`, `JsDevice::CreatePixelShader`, and
+  `JsDevice::CreateShaderResourceView` (v01.00 at guest+0x13217d0).
+  The last operation captures only opaque guest arguments, since view
+  descriptor pointers and result-object lifetimes are not yet verified. Their original guest routines
   still run; the interception preserves the incoming integer, SIMD and
   flags state before jumping through the original prologues.
 - `port/src/native_js_commands.h`: a bounded 4,096-entry command stream
   captures ordinary Draw, indexed draws, instanced indexed draws, PrepareDraw,
-  buffer creation and pixel-shader creation BEFORE PM4 encoding. Buffer-description and shader-header snapshots
+  buffer creation, pixel-shader creation and ShaderResourceView creation
+  BEFORE PM4 encoding. Buffer-description and shader-header snapshots
   are taken at function entry, when their pointers are still live.
 - The GPU-side consumer never follows game pointers. It retains only
   immutable integer/header observations and counts dropped/invalid entries.
@@ -132,6 +136,9 @@ Pure CPU-side tests are in `port/tests/`:
   indexed-buffer offset math and invalidation on object replacement
 - `test_native_js_pixel_shader_hook.c`: synthetic v01.00 PixelShader
   trampoline, copied header and SysV ABI preservation
+- `test_native_js_srv_hook.c`: synthetic v01.00
+  ShaderResourceView entry, verified 48-byte fingerprint, 20-byte
+  relocation-free trampoline and preservation of the six input registers
 - `test_native_js_draw_hook.c`: v01.00 ordinary nonindexed Draw entry
   trampoline and captured vertex-count semantics
 - `test_native_js_prepare_draw.c`: high-level PrepareDraw stack-preserving
@@ -297,6 +304,10 @@ image creation, sampler binding, draw, and pixel readback:
 - `TLG_NATIVE_VULKAN_MACRO_TEXTURE=1`: 2D-thin 128×64 RGBA8,
   bank-swizzle **7**, and a different gradient. This takes precedence
   over other triangle smoke flags when multiple are enabled.
+- Game `CreateShaderResourceView` events remain observation-only and cannot
+  automatically select a native image. A correct native view must be
+  matched with its game texture's allocation, format, subresources and
+  lifetime before replacing the legacy descriptor binding.
 
 **These GPU tests are committed but unverified on a real Vulkan device.**
 This is not a complete PS4 image-format implementation. Full native
