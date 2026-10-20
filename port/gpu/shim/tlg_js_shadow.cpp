@@ -16,7 +16,7 @@ std::atomic<TlgGpuNativeJsPop> g_pop{nullptr};
 std::atomic<void*> g_user{nullptr};
 std::atomic<TlgGpuNativeJsEventPop> g_event_pop{nullptr};
 std::atomic<void*> g_event_user{nullptr};
-std::atomic<std::uint64_t> g_indexed{0}, g_instanced{0}, g_dropped{0};
+std::atomic<std::uint64_t> g_nonindexed{0}, g_indexed{0}, g_instanced{0}, g_dropped{0};
 std::atomic<std::uint64_t> g_invalid{0}, g_batches{0}, g_last_context{0}, g_last_sequence{0};
 std::atomic<std::uint64_t> g_buffer_creates{0}, g_last_buffer_description{0};
 std::atomic<std::uint64_t> g_last_buffer_head{0}, g_last_buffer_tail{0};
@@ -46,7 +46,7 @@ void PumpOnGpuSubmission() {
     constexpr unsigned MaxPerSubmission = 8192;
     unsigned processed = 0;
     std::uint64_t discarded = 0;
-    std::uint64_t indexed = 0, instanced = 0, invalid = 0, drops = 0;
+    std::uint64_t nonindexed = 0, indexed = 0, instanced = 0, invalid = 0, drops = 0;
     std::uint64_t buffer_creates = 0, last_description = 0;
     std::uint64_t last_head = 0, last_tail = 0;
     std::uint64_t pixel_creates = 0, last_shader_head = 0, last_shader_tail = 0;
@@ -90,6 +90,18 @@ void PumpOnGpuSubmission() {
                 drops += discarded;
                 continue;
             }
+            if (raw.kind == TLG_JS_NATIVE_DRAW) {
+                TlgJsNativeNonIndexedCandidate ordinary{};
+                if (tlg_js_native_decode_nonindexed(&raw, &ordinary)) {
+                    ++nonindexed;
+                    last_context = ordinary.context;
+                    last_sequence = ordinary.sequence;
+                } else {
+                    ++invalid;
+                }
+                drops += discarded;
+                continue;
+            }
             if (!tlg_js_native_decode_draw(&raw, &cmd)) {
                 ++invalid;
                 drops += discarded;
@@ -116,6 +128,7 @@ void PumpOnGpuSubmission() {
     }
     // Keep the Vulkan command processor off the inter-core atomic hot path:
     // one aggregation per submission instead of one atomic op per game draw.
+    if (nonindexed) g_nonindexed.fetch_add(nonindexed, std::memory_order_relaxed);
     if (indexed) g_indexed.fetch_add(indexed, std::memory_order_relaxed);
     if (instanced) g_instanced.fetch_add(instanced, std::memory_order_relaxed);
     if (buffer_creates) {
@@ -141,11 +154,12 @@ void PumpOnGpuSubmission() {
     if (now - last_report >= std::chrono::seconds(5)) {
         last_report = now;
         const auto stats = Snapshot();
-        std::printf("Native Js shadow Vulkan stream: indexed=%llu instanced=%llu "
+        std::printf("Native Js shadow Vulkan stream: nonindexed=%llu indexed=%llu instanced=%llu "
                     "CreateBuffer=%llu (last bytes=%u usage=%u bind=%#x cpu=%#x) "
                     "CreatePixelShader=%llu "
                     "dropped=%llu invalid=%llu batches=%llu last=%llu; "
                     "original GPU renderer still active\n",
+                    static_cast<unsigned long long>(stats.nonindexed),
                     static_cast<unsigned long long>(stats.indexed),
                     static_cast<unsigned long long>(stats.indexed_instanced),
                     static_cast<unsigned long long>(stats.buffer_creates),
@@ -161,6 +175,7 @@ void PumpOnGpuSubmission() {
 
 Stats Snapshot() {
     return {
+        .nonindexed = g_nonindexed.load(std::memory_order_relaxed),
         .indexed = g_indexed.load(std::memory_order_relaxed),
         .indexed_instanced = g_instanced.load(std::memory_order_relaxed),
         .buffer_creates = g_buffer_creates.load(std::memory_order_relaxed),
@@ -187,7 +202,7 @@ Stats Snapshot() {
 void ResetForTest() {
     tlggpu_set_native_js_draw_source(nullptr, nullptr);
     tlggpu_set_native_js_event_source(nullptr, nullptr);
-    g_indexed.store(0); g_instanced.store(0); g_dropped.store(0);
+    g_nonindexed.store(0); g_indexed.store(0); g_instanced.store(0); g_dropped.store(0);
     g_buffer_creates.store(0); g_last_buffer_description.store(0);
     g_last_buffer_head.store(0); g_last_buffer_tail.store(0);
     g_pixel_creates.store(0); g_last_shader_head.store(0); g_last_shader_tail.store(0);
