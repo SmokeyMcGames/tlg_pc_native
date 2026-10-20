@@ -17,6 +17,9 @@
 __attribute__((used)) uintptr_t tlg_js_indexed_gateway;
 __attribute__((used)) uintptr_t tlg_js_instanced_gateway;
 __attribute__((used)) volatile uint64_t tlg_js_trace_instanced_calls;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_arg1;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_arg2;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_arg3;
 __attribute__((used)) volatile uint64_t tlg_js_trace_indexed_calls;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_context;
 volatile uintptr_t tlg_js_trace_last_arg1, tlg_js_trace_last_arg2, tlg_js_trace_last_arg3;
@@ -38,6 +41,9 @@ static void hook_instanced_entry(void) {
     __asm__ volatile(
         "pushfq\n\t"
         "lock incq tlg_js_trace_instanced_calls(%rip)\n\t"
+        "movq %rsi, tlg_js_trace_instanced_last_arg1(%rip)\n\t"
+        "movq %rdx, tlg_js_trace_instanced_last_arg2(%rip)\n\t"
+        "movq %rcx, tlg_js_trace_instanced_last_arg3(%rip)\n\t"
         "popfq\n\t"
         "jmp *tlg_js_instanced_gateway(%rip)\n\t");
 }
@@ -121,8 +127,11 @@ int main(void) {
     tlg_js_write_absolute_jump(machine + 512, (uintptr_t)&hook_instanced_entry);
     __builtin___clear_cache((char *)(machine + 512), (char *)(machine + 576));
     assert(instanced_fn((void *)(uintptr_t)0x234567, 0, 0, 0) == 42);
-    assert(instanced_fn((void *)(uintptr_t)0x345678, 0, 0, 0) == 42);
+    assert(instanced_fn((void *)(uintptr_t)0x345678, (void *)(uintptr_t)0xabc, (void *)(uintptr_t)0xdef, (void *)(uintptr_t)0x123) == 42);
     assert(tlg_js_trace_instanced_calls == 2);
+    assert(tlg_js_trace_instanced_last_arg1 == 0xabc);
+    assert(tlg_js_trace_instanced_last_arg2 == 0xdef);
+    assert(tlg_js_trace_instanced_last_arg3 == 0x123);
 #ifdef _WIN32
     VirtualFree(machine, 0, MEM_RELEASE);
 #else
