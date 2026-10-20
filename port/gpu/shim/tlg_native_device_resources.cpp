@@ -118,10 +118,11 @@ bool DeviceResources::CreateComputePipeline(
     // sequence. Never silently invent missing sampler/image bindings.
     std::vector<vk::DescriptorSetLayoutBinding> vk_bindings;
     std::uint32_t total_descriptors = 0;
+    std::uint32_t next_binding = 0;
     vk_bindings.reserve(resource_bindings.size());
     for (std::size_t i = 0; i < resource_bindings.size(); ++i) {
         const auto& binding = resource_bindings[i];
-        if (binding.binding != i || binding.descriptor_count < 1 ||
+        if (binding.binding != next_binding || binding.descriptor_count < 1 ||
             binding.descriptor_count > 64)
             return false;
         vk::DescriptorType type{};
@@ -141,6 +142,10 @@ bool DeviceResources::CreateComputePipeline(
                                            total_descriptors)
             return false;
         total_descriptors += binding.descriptor_count;
+        // Mirror the existing shader emitter: an image descriptor array of N
+        // occupies N binding numbers, even though VkDescriptorSetLayoutBinding
+        // stores that array as one layout entry.
+        next_binding += binding.descriptor_count;
         vk_bindings.push_back({
             .binding = binding.binding,
             .descriptorType = type,
