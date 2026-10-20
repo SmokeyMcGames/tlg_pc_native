@@ -10,6 +10,7 @@
 #include <array>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 
 namespace TlgNativeVk {
 namespace {
@@ -49,13 +50,13 @@ bool TriangleSmoke::Init() {
         return false;
     DeviceResources::ColorTargetInfo target{};
     if (!state_->resources.QueryColorTarget(SmokeTargetId, target)) return false;
-    state_->color_view = vk::ImageView{
-        // vk::ImageView and VkImageView have the same handle representation.
-        *reinterpret_cast<const VkImageView*>(&target.view)
-    };
+    VkImageView raw_view = VK_NULL_HANDLE;
+    static_assert(sizeof(raw_view) == sizeof(target.view));
+    std::memcpy(&raw_view, &target.view, sizeof(raw_view));
+    state_->color_view = vk::ImageView{raw_view};
 
     const auto device = state_->instance.GetDevice();
-    auto [layout_result, layout] = device.createPipelineLayoutUnique({});
+    auto [layout_result, layout] = device.createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
     if (layout_result != vk::Result::eSuccess) return false;
     state_->layout = std::move(layout);
 
@@ -141,7 +142,9 @@ bool TriangleSmoke::RecordOnce() {
             .imageLayout=vk::ImageLayout::eColorAttachmentOptimal,
             .loadOp=vk::AttachmentLoadOp::eClear,
             .storeOp=vk::AttachmentStoreOp::eStore,
-            .clearValue=vk::ClearColorValue{std::array<float,4>{0.0f,0.0f,0.0f,1.0f}},
+            .clearValue=vk::ClearValue{
+                .color = {.float32 = std::array<float,4>{0.0f,0.0f,0.0f,1.0f}},
+            },
         };
         const vk::RenderingInfo pass{
             .renderArea={.extent=SmokeSize},
