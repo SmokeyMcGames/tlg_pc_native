@@ -41,6 +41,7 @@ struct NativeContextState {
     std::uint32_t vertex_base = 0;
     std::uint32_t first_instance = 0;
     bool barriers_recorded = false;
+    bool vertex_fetch_ready = false; // explicitly validated vertex shader input map
 };
 
 struct NativeBoundDraw {
@@ -113,6 +114,35 @@ public:
         return true;
     }
 
+    // Independent non-indexed draw state. A buffer index binding is neither
+    // required nor legal here. vertex_fetch_ready=true is a promise from the
+    // native shader/resource system that all vertex inputs (or builtin
+    // gl_VertexIndex-only shaders) have been independently validated.
+    bool BindNonIndexed(std::uint64_t context, std::uint64_t pipeline,
+                        std::uint64_t targets, bool vertex_fetch_ready,
+                        std::uint32_t first_instance = 0) {
+        if (!context || !pipeline || !targets || !vertex_fetch_ready) return false;
+        std::scoped_lock lock{mutex_};
+        const auto p = pipelines_.find(pipeline);
+        const auto t = targets_.find(targets);
+        if (p == pipelines_.end() || t == targets_.end() ||
+            p->second.pipeline_kind != NativePipelineKind::Graphics)
+            return false;
+        contexts_[context] = {
+            .pipeline = pipeline, .indices = 0, .targets = targets,
+            .pipeline_generation = p->second.generation,
+            .index_generation = 0,
+            .target_generation = t->second.generation,
+            .barrier_epoch = 0,
+            .index_binding_base = 0,
+            .vertex_base = 0,
+            .first_instance = first_instance,
+            .barriers_recorded = false,
+            .vertex_fetch_ready = vertex_fetch_ready,
+        };
+        return true;
+    }
+
     // A native buffer upload invalidates previous synchronization and must be
     // observed before the buffer can be read by Vulkan. Caller records real
     // VkBufferMemoryBarrier2 and signals completed GPU epoch; this only tracks it.
@@ -135,6 +165,39 @@ public:
         std::scoped_lock lock{mutex_};
         contexts_.erase(context);
     }
+    bool TryResolveNonIndexed(const TlgJsNativeNonIndexedCandidate& game,
+                              NativeBoundDraw& output) const {
+        if (!game.context || !game.vertex_count || !game.instance_count)
+            return false;
+        std::scoped_lock lock{mutex_};
+        const auto context = contexts_.find(game.context);
+        if (context == contexts_.end()) return false;
+        const auto& state = context->second;
+        if (!state.barriers_recorded || !state.vertex_fetch_ready ||
+            state.indices != 0) return false;
+        const auto pipeline = pipelines_.find(state.pipeline);
+        const auto targets = targets_.find(state.targets);
+        if (pipeline == pipelines_.end() || targets == targets_.end() ||
+            pipeline->second.pipeline_kind != NativePipelineKind::Graphics ||
+            pipeline->second.generation != state.pipeline_generation ||
+            targets->second.generation != state.target_generation ||
+            !pipeline->second.vk_handle || !targets->second.vk_handle)
+            return false;
+        output = {
+            .command = Draw{
+                .indexed = false,
+                .vertex_or_index_count = game.vertex_count,
+                .instance_count = game.instance_count,
+                .first_vertex = game.first_vertex,
+                .first_instance = state.first_instance,
+            },
+            .pipeline = pipeline->second.vk_handle,
+            .index_buffer = 0,
+            .target_set = targets->second.vk_handle,
+        };
+        return true;
+    }
+
     // Resolve a semantic game draw without a single read from the PS4 PM4
     // register file. A failed lookup MUST fall back to the existing renderer.
     bool TryResolve(const TlgJsNativeDrawCandidate& game,
