@@ -109,13 +109,11 @@ static inline int tlg_js_native_decode_buffer_create(
     if (!record || !out ||
         record->kind != TLG_JS_NATIVE_CREATE_BUFFER || !record->context)
         return 0;
-    *out = (TlgJsNativeBufferCreateCandidate){
-        .sequence = record->ready,
-        .device = record->context,
-        .description = record->arg0,
-        .initial_data = record->arg1,
-        .output_object = record->arg2,
-    };
+    out->sequence = record->ready;
+    out->device = record->context;
+    out->description = record->arg0;
+    out->initial_data = record->arg1;
+    out->output_object = record->arg2;
     return 1;
 }
 
