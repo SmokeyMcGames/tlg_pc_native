@@ -25,6 +25,26 @@ extern "C" int supply(void *userdata, TlgJsNativeDrawCandidate *out,
     *out = f->commands[f->next++];
     return 1;
 }
+struct EventFixture {
+    unsigned next = 0;
+    TlgJsNativeCommand commands[3] = {
+        {.ready=1, .kind=TLG_JS_NATIVE_CREATE_BUFFER,
+         .context=0x111, .arg0=0x222, .arg1=0x333, .arg2=0x444},
+        {.ready=2, .kind=TLG_JS_NATIVE_INDEXED,
+         .context=0x555, .arg0=36, .arg1=8, .arg2=4},
+        {.ready=3, .kind=TLG_JS_NATIVE_INSTANCED,
+         .context=0x555, .arg0=18, .arg1=2, .arg2=3, .arg3=4}
+    };
+};
+extern "C" int supply_events(void *userdata, TlgJsNativeCommand *out,
+                              std::uint64_t *dropped) {
+    auto* f = static_cast<EventFixture*>(userdata);
+    *dropped = 0;
+    if (f->next >= 3) return 0;
+    *out = f->commands[f->next++];
+    return 1;
+}
+
 int main() {
     Fixture fixture;
     TlgNativeJs::ResetForTest();
@@ -41,6 +61,19 @@ int main() {
     tlggpu_set_native_js_draw_source(nullptr,nullptr);
     TlgNativeJs::PumpOnGpuSubmission();
     assert(TlgNativeJs::Snapshot().batches == 1);
+    // Typed high-level stream takes precedence over the legacy draw-only API.
+    EventFixture events;
+    TlgNativeJs::ResetForTest();
+    tlggpu_set_native_js_event_source(&supply_events, &events);
+    TlgNativeJs::PumpOnGpuSubmission();
+    const auto native = TlgNativeJs::Snapshot();
+    assert(native.indexed == 1);
+    assert(native.indexed_instanced == 1);
+    assert(native.buffer_creates == 1);
+    assert(native.last_buffer_description == 0x222);
+    assert(native.invalid == 0);
+    assert(native.last_sequence == 3);
+    TlgNativeJs::ResetForTest();
     std::puts("GPU native Js semantic collector PASS");
     return 0;
 }
