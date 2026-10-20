@@ -26,6 +26,12 @@ int main() {
     assert(!gpu.RegisterIndexBuffer(0x200,0,512));
     assert(!gpu.RegisterIndexBuffer(0x200,555,0));
     assert(gpu.RegisterPipeline(0x100,33));
+    assert(gpu.RegisterComputePipeline(0x101,44));
+    std::uint64_t compute_handle=0;
+    assert(gpu.LookupComputePipeline(0x101,compute_handle));
+    assert(compute_handle==44);
+    assert(!gpu.LookupComputePipeline(0x100,compute_handle));
+    assert(!gpu.Bind(0x111,0x101,0x200,0x300,0,17));
     assert(gpu.RegisterIndexBuffer(0x200,555,512));
     assert(gpu.RegisterTargetSet(0x300,777));
     assert(!gpu.Bind(0x111,0x100,0x222,0x300,0,17));
