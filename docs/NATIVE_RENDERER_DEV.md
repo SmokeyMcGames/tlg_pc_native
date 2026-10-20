@@ -10,12 +10,17 @@ the old Gnm/PM4 decoder is still the source of Vulkan resource and shader state.
 ### Game-level API capture (PS4 GPU encoding bypass point)
 
 - `port/src/probe.c`: for the verified **v01.00** executable only,
-  two signature-checked JsDeviceContext draw-entry trampolines capture every
-  original argument register without changing guest execution or any XMM state.
+  two JsDeviceContext draw hooks, a `JsDevice::CreateBuffer` hook and a
+  `JsDevice::CreatePixelShader` hook, each signature-checked before patching.
+  The original guest routines still run; all original argument and vector
+  registers are preserved by the interception stubs.
 - `port/src/native_js_commands.h`: a bounded 4,096-entry command stream
-  captures indexed and indexed-instanced requests BEFORE PM4 encoding.
-  The GPU-side consumer copies only opaque integer values, never follows game
-  pointers. Overflow is counted, not allowed to block the game.
+  captures indexed draws, instanced draws, buffer creation and pixel-shader
+  creation BEFORE PM4 encoding. Buffer-description and shader-header snapshots
+  are taken at function entry, when their pointers are still live.
+- The GPU-side consumer never follows game pointers. It retains only
+  immutable integer/header observations and counts dropped/invalid entries.
+  No Vulkan resource is substituted from an unverified guest pointer.
 - v01.03 high-level entry interception is deliberately disabled: its function
   signatures and guest data layouts have not been independently verified.
 
@@ -100,11 +105,18 @@ Pure CPU-side tests are in `port/tests/`:
 - `test_native_vk_resources.cpp`: check native Vulkan resource identity,
   GPU memory generations, guest context ownership, staging write epochs,
   indexed-buffer offset math and invalidation on object replacement
+- `test_native_js_pixel_shader_hook.c`: synthetic v01.00 PixelShader
+  trampoline, copied header and SysV ABI preservation
+- `test_native_spirv_registry.cpp`: shader cache key matching, replacement
+  generations, budget refusal and nonblocking retained lifetime
+- `test_native_shader_inventory.py`: synthetic embedded and extracted
+  .sb metadata validation; no proprietary shader data
 
 For a configured native build these are standalone Ninja targets
 `native-js-command-test`, `native-js-shadow-test`,
-`native-vk-draw-test`, `native-js-to-vk-test`, and
-`native-vk-resources-test`. They do not use
+`native-vk-draw-test`, `native-js-to-vk-test`,
+`native-vk-resources-test`, `native-js-pixel-shader-hook-test`,
+and `native-spirv-registry-test`. They do not use
 shaders, game assets, or graphics-driver initialization.
 
 The Vulkan command encoder and register-capture ring were checked locally
@@ -131,13 +143,14 @@ independent of PS4 PM4 command decoding:
   draw commands and does not touch the presented swapchain image.
   It attempts to record the pass once on the GPU submission thread and
   logs native pipeline initialization and recording outcomes.
-- The smoke destructor submits any deferred recording and waits for GPU
-  execution before freeing its pipeline and image.
-- **No image readback or pixel comparison is implemented**, and the
-  current environment cannot run the full Vulkan code with a GPU device.
-  Successful initialization or scheduling is not proof of an actual
-  correct rendered image. Full Windows/Linux build and runtime test
-  remain unverified on this development branch.
+- The graphics smoke uses a registry-validated native index buffer and
+  `vkCmdDrawIndexed`; the renderer copies the 64×64 result to a host-visible
+  buffer and verifies the center pixel against its synthetic shader output.
+- The destructor completes any deferred recording before freeing the image,
+  pipeline and readback buffer.
+- The current environment cannot execute the complete Vulkan GPU path:
+  **native GPU pixel readback and full Windows gameplay are unverified**.
+  A recorded pass is not proof that the test returned the expected pixels.
 
 This validates a narrow **native Vulkan rendering capability**, not a
 native renderer for *The Last Guardian*: game shaders, scene resources,
@@ -158,6 +171,45 @@ all of the actual game's material shaders in PSARC assets.
 The inventory does not yet compile GCN to SPIR-V; shader translation
 requires verified resource descriptions and per-stage specialization
 to preserve original behavior.
+
+## Independent native Vulkan compute verification
+
+The opt-in flag **`TLG_NATIVE_COMPUTE_SMOKE=1`** creates a storage buffer,
+a Vulkan compute descriptor-set layout and a compute pipeline compiled from
+`native_storage.comp`. It records a native storage-buffer descriptor,
+`vkCmdDispatch`, a compute-write-to-host-read barrier, and GPU/CPU readback.
+Four known 32-bit values are checked after submission. This executes
+independently of the game's Gnm/PM4 processing.
+
+The smoke shader, descriptor layout, pipeline and buffer are synthetic; they
+do **not** translate the game's compute effects. The path is opt-in because
+its one-shot readback calls `Scheduler::Finish()`. Its GPU result and
+Windows build have **not** yet been verified.
+
+## Native GCN shader translation and reuse
+
+- `tlg_native_gcn_compiler.{h,cpp}` is a PM4-independent entry point into
+  the existing GCN IR translator and SPIR-V emitter. It accepts explicit,
+  verified shader bytes, user-data registers and runtime specialization.
+  Unverified input, unsupported stages and unknown descriptors fail closed.
+- `DeviceResources::CreateResourceFreeGraphicsPipelineFromGCN` connects
+  verified descriptor-free vertex/fragment shaders to the independent Vulkan
+  pipeline factory. It cannot render arbitrary materials yet.
+- `tlg_native_spirv_registry.h` caches immutable SPIR-V for the exact game,
+  shader code, runtime specialization, resource layout, recompiler revision
+  and Vulkan vendor/device/driver. Reuse across any mismatched key is rejected.
+  A bounded memory budget prevents unchecked accumulation.
+- `DeviceResources::CreateGraphicsPipelineFromCachedSpirv` consumes those
+  verified cached stages, avoiding repeated translation for an identical
+  pipeline. It still uses the same safe native resource-lifetime rules.
+- The Vulkan pipeline layout reserves the canonical `Shader::PushData`
+  range for GCN-generated stage constants. Supplying actual game state for
+  that range is part of the missing JsDeviceContext work.
+
+The cache and shader interception have local CPU-only regression coverage;
+full game shader SPIR-V translation has **not** been validated. The source
+still needs verified per-shader resource descriptors, image formats,
+vertex fetch/input layout and stage specializations.
 
 ## Independent SPIR-V pipeline ownership
 
