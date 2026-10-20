@@ -10,6 +10,10 @@ struct Stats {
     std::uint64_t indexed_instanced{};
     std::uint64_t buffer_creates{};
     std::uint64_t last_buffer_description{};
+    std::uint32_t last_buffer_bytes{};
+    std::uint32_t last_buffer_usage{};
+    std::uint32_t last_buffer_bind_flags{};
+    std::uint32_t last_buffer_cpu_access{};
     std::uint64_t dropped{};
     std::uint64_t batches{};
     std::uint64_t invalid{};
