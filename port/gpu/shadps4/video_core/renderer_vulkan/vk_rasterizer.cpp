@@ -9,6 +9,7 @@
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "tlg_toggles.h"
 #include "tlg_js_shadow.h"
+#include "tlg_native_vk_draw.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
 #include "core/debug_state.h"
@@ -1162,21 +1163,15 @@ void Rasterizer::DrawRecord(const GraphicsPipeline* pipeline, const PreparedDraw
     const u32 num_instances = regs.num_instances.NumInstances();
     const u32 first_vertex = vertex_offset;
     const u32 first_instance = instance_offset;
+    // Vulkan commands are encoded without accessing PS4 PM4/reg state.
+    // Once the native Js resource backend owns pipelines and buffers it can use
+    // this same typed recorder; the compatibility path supplies inputs today.
+    const TlgNativeVk::Draw draw_data{
+        is_indexed, num_indices, num_instances, first_vertex, first_instance, 0
+    };
     scheduler.Record([=](vk::CommandBuffer cmdbuf) {
-        const auto draw = [&] {
-            if (is_indexed) {
-                cmdbuf.drawIndexed(num_indices, num_instances, 0, s32(first_vertex),
-                                   first_instance);
-            } else {
-                cmdbuf.draw(num_indices, num_instances, first_vertex, first_instance);
-            }
-        };
-        cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, handle);
-        draw();
-        if (square) [[unlikely]] {
-            cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, square);
-            draw();
-        }
+        TlgNativeVk::EmitGraphicsDraw(cmdbuf, vk::PipelineBindPoint::eGraphics,
+                                     handle, square, draw_data);
     });
     if (FrameCapture::Active()) {
         const auto* ps = pipeline->GetStages()[u32(Shader::SwStage::Fragment)];
