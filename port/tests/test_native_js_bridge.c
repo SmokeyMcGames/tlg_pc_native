@@ -2,6 +2,7 @@
  * Isolated test: verified guest signature, absolute trampoline, SysV guest ABI.
  * Does not require proprietary game files, Vulkan, or shadPS4.
  */
+#define _GNU_SOURCE
 #include "../src/native_js_bridge.h"
 #include <assert.h>
 #include <stdio.h>
