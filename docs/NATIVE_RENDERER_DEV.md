@@ -159,6 +159,24 @@ The inventory does not yet compile GCN to SPIR-V; shader translation
 requires verified resource descriptions and per-stage specialization
 to preserve original behavior.
 
+## Independent SPIR-V pipeline ownership
+
+`DeviceResources::CreateGraphicsPipeline` now accepts pretranslated SPIR-V
+vertex/fragment modules and creates a Vulkan graphics pipeline through
+the existing device. It registers a generation-checked native pipeline
+handle with the context resource registry. Replacement and retirement
+keep old pipeline allocations alive until the GPU is idle. The initial
+fixed-function configuration is a triangle-list pipeline with one color
+attachment and no vertex attributes or descriptor sets, suitable for the
+offscreen native prototype but **not** for arbitrary Last Guardian
+materials.
+
+This is the next structural step toward removing the legacy renderer;
+the game shader ABI, reflected descriptor layouts, vertex input and
+specialization must still be reconstructed and plugged into these APIs.
+Neither independent game-pipeline creation nor full gameplay rendering
+has been verified in Windows.
+
 ## Critical work that remains before removing the old GPU interpreter
 
 1. Identify and signature-check all **game-level** resource creation,
