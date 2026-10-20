@@ -480,6 +480,7 @@ def build_env(settings, extra=None):
         env.setdefault('TLG_ASYNC_SHADERS', '0')
     if settings.get('native_draw_bridge', False):
         env.setdefault('TLG_NATIVE_DRAW_BRIDGE', '1')
+        env.setdefault('TLG_NATIVE_COMPUTE_RECIPES', '1')
     # Window name and app id (matches tlg-pc.desktop for Alt+Tab and the dock) and icon.
     env.setdefault('TLG_APP_NAME', 'The Last Guardian')
     env.setdefault('TLG_APP_ID', 'tlg-pc')
