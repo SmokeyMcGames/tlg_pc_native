@@ -388,6 +388,11 @@ s32 PS4_SYSV_ABI sceGnmDispatchDirect(u32* cmdbuf, u32 size, u32 threads_x, u32 
         cmdbuf[0] = (flags & 0x18) + 1; // ordered append mode
 
         WriteTrailingNop<3>(cmdbuf + 1);
+        // cmdbuf is now four words past the PM4 header; the fifth word is
+        // dispatch_initiator at cmdbuf[0]. Capture all five for validation.
+        TlgNativeDraw::Get().Publish(cmdbuf - 4,
+                                     TlgNativeDraw::Bridge::Kind::DispatchDirect,
+                                     TlgNativeDraw::Bridge::DispatchWords);
         return ORBIS_OK;
     }
     return -1;
@@ -602,6 +607,9 @@ s32 PS4_SYSV_ABI sceGnmDrawIndexOffset(u32* cmdbuf, u32 size, u32 index_offset, 
                            sceKernelIsNeoMode() ? flags & 0xe0000000u : 0u);
 
         WriteTrailingNop<3>(cmdbuf);
+        TlgNativeDraw::Get().Publish(cmdbuf - TlgNativeDraw::Bridge::IndexedWords,
+                                     TlgNativeDraw::Bridge::Kind::DrawIndexed,
+                                     TlgNativeDraw::Bridge::IndexedWords);
         return ORBIS_OK;
     }
     return -1;
