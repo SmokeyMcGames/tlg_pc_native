@@ -515,6 +515,13 @@ add_executable(native-js-pixel-shader-hook-test EXCLUDE_FROM_ALL
 target_compile_features(native-js-pixel-shader-hook-test PRIVATE c_std_11)
 target_compile_options(native-js-pixel-shader-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 
+# Verified native GCN descriptor reflection and cross-stage slot ownership.
+# Standalone C++ test: no shader assets, driver, or GitHub workflows.
+add_executable(native-descriptor-layout-test EXCLUDE_FROM_ALL
+    ../tests/test_native_descriptor_layout.cpp)
+target_compile_features(native-descriptor-layout-test PRIVATE cxx_std_23)
+target_compile_options(native-descriptor-layout-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
 # Driver- and specialization-keyed pretranslated SPIR-V cache regression.
 add_executable(native-spirv-registry-test EXCLUDE_FROM_ALL
     ../tests/test_native_spirv_registry.cpp)

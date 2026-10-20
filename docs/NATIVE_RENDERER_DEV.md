@@ -359,6 +359,34 @@ specialization must still be reconstructed and plugged into these APIs.
 Neither independent game-pipeline creation nor full gameplay rendering
 has been verified in Windows.
 
+## Verified GCN descriptor-layout translation (latest increment)
+
+The native GCN compiler now has a **stage-aware, explicit descriptor
+contract**. Its `GcnShaderInput::expected_descriptors` is supplied only after
+the high-level Js resource view, shader user-data and material specialization
+are independently verified. `TranslateVerifiedGcn` compares that declaration
+against the actual recompiler resource reflection for buffers, images and
+samplers, using the same binding order as the SPIR-V emitter. It rejects
+unverified layouts, missing/extra bindings, types or counts, stage slot
+collisions, unsupported mip-fallback schemes, special emulator buffers, fmask
+and vertex fetch. There is **no guessed descriptor assignment**.
+
+`DeviceResources::CreateVerifiedGraphicsPipelineFromGCN` now chains vertex
+then fragment binding offsets before building a native Vulkan pipeline.
+`CreateVerifiedComputePipelineFromGCN` handles a verified compute-stage
+layout. The original descriptor-free paths remain restricted to
+descriptor-free shaders. `native-descriptor-layout-test` exercises contiguous
+bindings, multi-stage offsets, array counts and rejected malformed layouts
+without requiring Vulkan.
+
+**Important:** This is shader-to-SPIR-V plus pipeline-layout integration, **not
+gameplay rendering**. The game's CreatePixelShader and CreateShaderResourceView
+hooks still observe opaque inputs. Live guest resource identities, shader
+source ownership, native vertex fetch, Vk descriptor writes, `PushData`,
+barriers, render targets and draw synchronization remain unverified. Do not
+allow this new pipeline entry point to submit or replace a game draw until
+those objects and lifetimes are validated.
+
 ## Critical work that remains before removing the old GPU interpreter
 
 1. Identify and signature-check all **game-level** resource creation,

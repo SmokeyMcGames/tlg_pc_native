@@ -6,6 +6,7 @@
 // This does not create guest textures or shader pipelines yet. GPU operations
 // remain opt-in until resource and framebuffer parity are established.
 #include "tlg_native_vk_resources.h"
+#include "tlg_native_descriptor_layout.h"
 #include "tlg_native_texture_layout.h"
 #include "tlg_native_rgba8_detile.h"
 #include "tlg_native_rgba8_macro_detile.h"
@@ -19,15 +20,6 @@ namespace Shader { struct RuntimeInfo; struct Profile; }
 
 namespace TlgNativeVk {
 struct GcnShaderInput;
-enum class NativeDescriptorKind : std::uint32_t {
-    StorageBuffer = 1, SampledImage = 2, StorageImage = 3, Sampler = 4,
-};
-struct NativeDescriptorBinding {
-    std::uint32_t binding = 0;
-    std::uint32_t descriptor_count = 1;
-    NativeDescriptorKind kind = NativeDescriptorKind::StorageBuffer;
-};
-
 struct NativeShaderKey;
 class NativeShaderRegistry;
 class DeviceResources {
@@ -59,6 +51,16 @@ public:
         const GcnShaderInput& fragment,
         const Shader::RuntimeInfo& fragment_runtime,
         const Shader::Profile& profile, std::uint32_t color_format);
+    // Translate and link explicitly verified storage-buffer/image/sampler
+    // layouts without using PM4. This creates a Vulkan pipeline only; game
+    // rendering additionally requires live descriptors, push constants,
+    // verified vertex fetch, barriers and render-target ownership.
+    bool CreateVerifiedGraphicsPipelineFromGCN(
+        std::uint64_t guest_id, const GcnShaderInput& vertex,
+        const Shader::RuntimeInfo& vertex_runtime,
+        const GcnShaderInput& fragment,
+        const Shader::RuntimeInfo& fragment_runtime,
+        const Shader::Profile& profile, std::uint32_t color_format);
     // Fast native shader path: reuse immutable, already translated SPIR-V
     // entries for the exact game, driver, compiler and descriptor specialization.
     // This avoids re-running GCN translation when the pipeline is recreated.
@@ -80,6 +82,11 @@ public:
         std::uint64_t guest_id, std::span<const std::uint32_t> compute_spirv,
         std::span<const NativeDescriptorBinding> resource_bindings = {});
     bool CreateResourceFreeComputePipelineFromGCN(
+        std::uint64_t guest_id, const GcnShaderInput& compute,
+        const Shader::RuntimeInfo& runtime, const Shader::Profile& profile);
+    // Accept only a fully validated native descriptor-layout contract.
+    // This does not submit the game's compute dispatch or memory barriers.
+    bool CreateVerifiedComputePipelineFromGCN(
         std::uint64_t guest_id, const GcnShaderInput& compute,
         const Shader::RuntimeInfo& runtime, const Shader::Profile& profile);
     bool CreateComputePipelineFromCachedSpirv(

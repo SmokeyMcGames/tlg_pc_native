@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <span>
 #include <vector>
+#include "tlg_native_descriptor_layout.h"
 #include "shader_recompiler/runtime_info.h"
 #include "shader_recompiler/profile.h"
 #include "shader_recompiler/backend/bindings.h"
@@ -23,6 +24,7 @@ enum class ShaderTranslationStatus {
     UnsupportedStage,
     InvalidCode,
     RequiresDescriptorBindings,
+    DescriptorLayoutMismatch,
     InvalidSpirv,
     TranslationFailed,
 };
@@ -35,11 +37,17 @@ struct GcnShaderInput {
     bool code_verified = false;
     bool user_data_verified = false;
     bool runtime_state_verified = false;
+    // Set true only after resolving immutable Js resource identities and
+    // descriptor types for this exact shader specialization. Stage-specific
+    // bindings use absolute SPIR-V set-0 numbers, not guessed PS4 slots.
+    bool descriptor_layout_verified = false;
+    std::span<const NativeDescriptorBinding> expected_descriptors{};
 };
 struct ShaderTranslationResult {
     ShaderTranslationStatus status{ShaderTranslationStatus::InvalidCode};
     std::vector<std::uint32_t> spirv{};
     Shader::Backend::Bindings bindings{};
+    std::vector<NativeDescriptorBinding> descriptor_layout{};
     std::uint32_t buffers = 0, images = 0, samplers = 0, fmasks = 0;
 };
 
@@ -50,6 +58,7 @@ struct ShaderTranslationResult {
 ShaderTranslationResult TranslateVerifiedGcn(
     const GcnShaderInput& input,
     const Shader::RuntimeInfo& verified_runtime_info,
-    const Shader::Profile& current_vulkan_device_profile);
+    const Shader::Profile& current_vulkan_device_profile,
+    Shader::Backend::Bindings initial_bindings = {});
 
 } // namespace TlgNativeVk

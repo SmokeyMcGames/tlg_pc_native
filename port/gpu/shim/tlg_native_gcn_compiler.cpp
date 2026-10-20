@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "tlg_native_gcn_compiler.h"
 #include <exception>
+#include <algorithm>
 #include <span>
 #include "shader_recompiler/info.h"
+#include "shader_recompiler/resource.h"
 #include "shader_recompiler/recompiler.h"
 #include "shader_recompiler/params.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -11,7 +13,8 @@ namespace TlgNativeVk {
 ShaderTranslationResult TranslateVerifiedGcn(
     const GcnShaderInput& input,
     const Shader::RuntimeInfo& provided_runtime_info,
-    const Shader::Profile& profile) {
+    const Shader::Profile& profile,
+    Shader::Backend::Bindings initial_bindings) {
     ShaderTranslationResult result{};
     if (!input.code_verified || !input.user_data_verified) {
         result.status = ShaderTranslationStatus::UnverifiedGuestShader;
@@ -35,7 +38,10 @@ ShaderTranslationResult TranslateVerifiedGcn(
         return result;
     }
     if (!input.shader_hash || input.code.size() < 4 ||
-        input.code.size() > (1u << 20)) {
+        input.code.size() > (1u << 20) ||
+        initial_bindings.unified > MaxNativeDescriptorSlots ||
+        initial_bindings.buffer > Shader::NUM_BUFFERS ||
+        initial_bindings.user_data > Shader::NUM_USER_DATA_REGS) {
         result.status = ShaderTranslationStatus::InvalidCode;
         return result;
     }
@@ -53,18 +59,78 @@ ShaderTranslationResult TranslateVerifiedGcn(
         result.images = static_cast<std::uint32_t>(info.images.size());
         result.samplers = static_cast<std::uint32_t>(info.samplers.size());
         result.fmasks = static_cast<std::uint32_t>(info.fmasks.size());
-        // The independent native pipeline currently supports descriptor-free
-        // shaders only. Do NOT silently bind shaders to an empty VkLayout.
-        // Later native descriptors must reflect exact game buffer/texture
-        // usages, including aliasing and guest GPU/CPU memory synchronization.
-        if (result.buffers || result.images || result.samplers ||
-            result.fmasks || info.has_fetch_shader) {
+        // The emitter allocates set-0 slots in this exact order. The guest's
+        // independently verified per-stage descriptor contract must match
+        // the compiler reflection byte-for-byte before SPIR-V can be used.
+        // Special emulator buffers, fmask and fetch shaders still require
+        // separate native memory/vertex ownership and are not silently mapped.
+        if (result.fmasks || info.has_fetch_shader ||
+            std::any_of(info.buffers.begin(), info.buffers.end(),
+                        [](const Shader::BufferResource& b) { return b.IsSpecial(); }) ||
+            std::any_of(info.images.begin(), info.images.end(),
+                        [](const Shader::ImageResource& i) {
+                            return i.mip_fallback_mode != Shader::MipStorageFallbackMode::None;
+                        }) ||
+            result.buffers > Shader::NUM_BUFFERS - initial_bindings.buffer ||
+            info.ud_mask.NumRegs() >
+                Shader::NUM_USER_DATA_REGS - initial_bindings.user_data) {
             result.status = ShaderTranslationStatus::RequiresDescriptorBindings;
             return result;
         }
-        auto bindings = Shader::Backend::Bindings{};
+        for (const auto& buffer : info.buffers) {
+            (void)buffer;
+            if (!AppendNativeDescriptor(result.descriptor_layout,
+                                        initial_bindings.unified,
+                                        NativeDescriptorKind::StorageBuffer)) {
+                result.status = ShaderTranslationStatus::RequiresDescriptorBindings;
+                return result;
+            }
+        }
+        for (const auto& image : info.images) {
+            if (!AppendNativeDescriptor(result.descriptor_layout,
+                                        initial_bindings.unified,
+                                        image.is_written
+                                            ? NativeDescriptorKind::StorageImage
+                                            : NativeDescriptorKind::SampledImage)) {
+                result.status = ShaderTranslationStatus::RequiresDescriptorBindings;
+                return result;
+            }
+        }
+        for (const auto& sampler : info.samplers) {
+            (void)sampler;
+            if (!AppendNativeDescriptor(result.descriptor_layout,
+                                        initial_bindings.unified,
+                                        NativeDescriptorKind::Sampler)) {
+                result.status = ShaderTranslationStatus::RequiresDescriptorBindings;
+                return result;
+            }
+        }
+        if ((!result.descriptor_layout.empty() &&
+             !input.descriptor_layout_verified) ||
+            !MatchNativeDescriptorLayout(input.expected_descriptors,
+                                         result.descriptor_layout,
+                                         initial_bindings.unified)) {
+            result.status = ShaderTranslationStatus::DescriptorLayoutMismatch;
+            return result;
+        }
+        // The offset is passed through from the earlier shader stage so the
+        // fragment stage never reuses a vertex-stage descriptor number.
+        auto bindings = initial_bindings;
         result.spirv = Shader::Backend::SPIRV::EmitSPIRV(
             profile, runtime, program, bindings);
+        std::uint32_t reflected_end = initial_bindings.unified;
+        if (!result.descriptor_layout.empty()) {
+            const auto& last = result.descriptor_layout.back();
+            reflected_end = last.binding + last.descriptor_count;
+        }
+        if (bindings.unified != reflected_end ||
+            bindings.buffer != initial_bindings.buffer + result.buffers ||
+            bindings.user_data >
+                Shader::NUM_USER_DATA_REGS) {
+            result.status = ShaderTranslationStatus::DescriptorLayoutMismatch;
+            result.spirv.clear();
+            return result;
+        }
         if (result.spirv.size() < 5 || result.spirv[0] != 0x07230203u) {
             result.status = ShaderTranslationStatus::InvalidSpirv;
             result.spirv.clear();

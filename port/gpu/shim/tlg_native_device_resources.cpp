@@ -266,7 +266,23 @@ bool DeviceResources::CreateResourceFreeComputePipelineFromGCN(
     auto translated = TranslateVerifiedGcn(compute, runtime, profile);
     if (translated.status != ShaderTranslationStatus::Success)
         return false;
+    if (!translated.descriptor_layout.empty())
+        return false;
     return CreateComputePipeline(guest, translated.spirv);
+}
+
+bool DeviceResources::CreateVerifiedComputePipelineFromGCN(
+    std::uint64_t guest, const GcnShaderInput& compute,
+    const Shader::RuntimeInfo& runtime, const Shader::Profile& profile) {
+    if (!guest || compute.hw_stage != Shader::HwStage::Compute ||
+        compute.sw_stage != Shader::SwStage::Compute)
+        return false;
+    auto compiled = TranslateVerifiedGcn(compute, runtime, profile);
+    if (compiled.status != ShaderTranslationStatus::Success ||
+        !ValidNativeDescriptorLayout(compiled.descriptor_layout))
+        return false;
+    return CreateComputePipeline(guest, compiled.spirv,
+                                 compiled.descriptor_layout);
 }
 
 bool DeviceResources::CreateComputePipelineFromCachedSpirv(
@@ -350,10 +366,38 @@ bool DeviceResources::CreateResourceFreeGraphicsPipelineFromGCN(
     auto vs = TranslateVerifiedGcn(vertex, vertex_runtime, profile);
     if (vs.status != ShaderTranslationStatus::Success)
         return false;
-    auto fs = TranslateVerifiedGcn(fragment, fragment_runtime, profile);
-    if (fs.status != ShaderTranslationStatus::Success)
+    auto fs = TranslateVerifiedGcn(fragment, fragment_runtime, profile,
+                                   vs.bindings);
+    if (fs.status != ShaderTranslationStatus::Success ||
+        !vs.descriptor_layout.empty() || !fs.descriptor_layout.empty())
         return false;
     return CreateGraphicsPipeline(guest, vs.spirv, fs.spirv, format);
+}
+
+bool DeviceResources::CreateVerifiedGraphicsPipelineFromGCN(
+    std::uint64_t guest, const GcnShaderInput& vertex,
+    const Shader::RuntimeInfo& vertex_runtime,
+    const GcnShaderInput& fragment,
+    const Shader::RuntimeInfo& fragment_runtime,
+    const Shader::Profile& profile, std::uint32_t format) {
+    if (!guest || vertex.hw_stage != Shader::HwStage::Vertex ||
+        vertex.sw_stage != Shader::SwStage::Vertex ||
+        fragment.hw_stage != Shader::HwStage::Fragment ||
+        fragment.sw_stage != Shader::SwStage::Fragment)
+        return false;
+    auto vs = TranslateVerifiedGcn(vertex, vertex_runtime, profile);
+    if (vs.status != ShaderTranslationStatus::Success)
+        return false;
+    auto fs = TranslateVerifiedGcn(fragment, fragment_runtime, profile,
+                                   vs.bindings);
+    if (fs.status != ShaderTranslationStatus::Success)
+        return false;
+    std::vector<NativeDescriptorBinding> layout = vs.descriptor_layout;
+    layout.insert(layout.end(), fs.descriptor_layout.begin(),
+                  fs.descriptor_layout.end());
+    if (!ValidNativeDescriptorLayout(layout))
+        return false;
+    return CreateGraphicsPipeline(guest, vs.spirv, fs.spirv, format, layout);
 }
 
 bool DeviceResources::CreateGraphicsPipeline(
