@@ -6,7 +6,7 @@ name: Build
 
 on:
   push:
-    branches: [main]
+    branches: [main, experimental/native-js-command-stream]
     tags: ['v*']
   # Pull requests to main build both packages (artifacts only): the Release is left untouched.
   pull_request:
