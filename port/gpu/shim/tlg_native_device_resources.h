@@ -31,6 +31,13 @@ public:
                            std::size_t source_bytes, std::uint64_t upload_epoch);
     void RetireIndexBuffer(std::uint64_t guest_id);
 
+    // Native Vulkan offscreen 2D color target. The backend is responsible for
+    // issuing an actual VkImageMemoryBarrier2 to COLOR_ATTACHMENT_OPTIMAL before
+    // the registry is allowed to acknowledge barriers and use this target.
+    bool CreateColorTarget(std::uint64_t guest_id, std::uint32_t width,
+                           std::uint32_t height, std::uint32_t vk_format);
+    void RetireColorTarget(std::uint64_t guest_id);
+
     // Physically destroy retired resources only after the Vulkan device is
     // idle. This method may block; do NOT call from a page-fault handler.
     void CollectRetiredAfterIdle();
