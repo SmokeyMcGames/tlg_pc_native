@@ -1082,7 +1082,7 @@ static void install_js_native_trace(const char *app0, Segment *segments,
     const uint64_t instanced = TLG_JS_100_INSTANCED_ENTRY;
     const uint64_t create_buffer = TLG_JS_100_CREATE_BUFFER_ENTRY;
     const uint64_t pixel_shader = TLG_JS_100_CREATE_PIXEL_SHADER_ENTRY;
-    /* Atomic feature-level policy: validate all three signatures before writing.
+    /* Atomic feature-level policy: validate all six signatures before writing.
      * An unexpected game build leaves all guest code byte-for-byte intact. */
     if (!mapped(segments, count, prepare,
                 TLG_JS_PREPARE_DRAW_FINGERPRINT_BYTES) ||
