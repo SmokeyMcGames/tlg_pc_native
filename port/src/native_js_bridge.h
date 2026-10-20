@@ -46,6 +46,36 @@ tlg_js_100_create_buffer_fingerprint[TLG_JS_CREATE_BUFFER_FINGERPRINT_BYTES] = {
     0xfd,0xff,0xff,0x4d,0x85,0xed,0x48,0x8b,
 };
 
+/* Verified against the supplied v01.00 ELF, at guest+0x131e9d0:
+ * JsDevice::CreatePixelShader contains its named diagnostic at 0x131eec7.
+ * Prologue is 20 whole, relocation-free bytes, but the following RIP-relative
+ * instruction MUST remain in its original location. Hook only after checking
+ * the entire unique 48-byte fingerprint; never infer an offset from v01.03.
+ */
+#define TLG_JS_100_CREATE_PIXEL_SHADER_ENTRY UINT64_C(0x131e9d0)
+#define TLG_JS_CREATE_PIXEL_SHADER_FINGERPRINT_BYTES 48
+static const uint8_t tlg_js_100_create_pixel_shader_fingerprint
+    [TLG_JS_CREATE_PIXEL_SHADER_FINGERPRINT_BYTES] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+    0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81, 0xec,
+    0x38, 0x02, 0x00, 0x00, 0x48, 0x8b, 0x05, 0xd5,
+    0x96, 0x3b, 0x00, 0x48, 0x89, 0x8d, 0xb0, 0xfd,
+    0xff, 0xff, 0x48, 0x89, 0xfb, 0x49, 0x89, 0xd6,
+    0x49, 0x89, 0xf5, 0x48, 0x8b, 0x00, 0x48, 0x89,
+};
+static inline int tlg_js_100_pixel_shader_signature_match(
+    const uint8_t *image, size_t size) {
+    const uint64_t at = TLG_JS_100_CREATE_PIXEL_SHADER_ENTRY;
+    return image && size >= at + TLG_JS_CREATE_PIXEL_SHADER_FINGERPRINT_BYTES &&
+        !memcmp(image + at, tlg_js_100_create_pixel_shader_fingerprint,
+                TLG_JS_CREATE_PIXEL_SHADER_FINGERPRINT_BYTES);
+}
+
+/* Both 01.00 CreateBuffer and CreatePixelShader share the verified 20-byte
+ * prologue. Their 48-byte body signatures differ; their jump-back builder is
+ * the same, provided the caller has verified the correct function fingerprint.
+ */
+
 #define TLG_JS_PROLOGUE_BYTES 14
 #define TLG_JS_FINGERPRINT_BYTES 31
 #define TLG_JS_TRAMPOLINE_BYTES (TLG_JS_PROLOGUE_BYTES + 14)
