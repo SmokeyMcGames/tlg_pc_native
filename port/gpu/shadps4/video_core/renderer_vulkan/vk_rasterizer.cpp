@@ -75,8 +75,10 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     const char* native_resources = std::getenv("TLG_NATIVE_DEVICE_RESOURCES");
     const char* native_smoke = std::getenv("TLG_NATIVE_GPU_SMOKE");
     const char* native_triangle = std::getenv("TLG_NATIVE_VULKAN_TRIANGLE");
+    const char* native_compute = std::getenv("TLG_NATIVE_COMPUTE_SMOKE");
     const bool smoke = native_smoke && native_smoke[0] == '1' && !native_smoke[1];
     const bool triangle = native_triangle && native_triangle[0] == '1' && !native_triangle[1];
+    const bool compute = native_compute && native_compute[0] == '1' && !native_compute[1];
     if (!EmulatorSettings.IsNullGPU() &&
         ((native_resources && native_resources[0] == '1' && !native_resources[1]) ||
          smoke || triangle)) {
@@ -106,6 +108,14 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
                 std::puts("Native Vulkan offscreen triangle: pipeline/resource initialization FAILED");
                 native_triangle_smoke.reset();
             }
+        }
+    }
+    if (compute && !EmulatorSettings.IsNullGPU()) {
+        native_compute_smoke = std::make_unique<TlgNativeVk::ComputeSmoke>(
+            instance, scheduler);
+        if (!native_compute_smoke->Init()) {
+            std::puts("Native Vulkan compute smoke: pipeline/resource initialization FAILED");
+            native_compute_smoke.reset();
         }
     }
 
@@ -1506,6 +1516,12 @@ void Rasterizer::OnSubmit() {
         // Repeated retries can disturb guest GPU scheduling after a device error.
         native_triangle_emitted = true;
         (void)native_triangle_smoke->RecordOnce();
+    }
+    if (native_compute_smoke && !native_compute_emitted) {
+        // Optional, one-shot native Vulkan compute/descriptor proof.
+        // This does not execute or change any guest compute shader.
+        native_compute_emitted = true;
+        (void)native_compute_smoke->RecordAndVerifyOnce();
     }
     if (fault_process_pending) {
         fault_process_pending = false;
