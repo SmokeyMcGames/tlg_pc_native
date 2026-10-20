@@ -768,7 +768,7 @@ static void install_js_native_trace(const char *app0, Segment *segments,
         return;
     }
     const uint64_t at = TLG_JS_100_INDEXED_ENTRY;
-    if (!mapped(segments, count, at, TLG_JS_PROLOGUE_BYTES) ||
+    if (!mapped(segments, count, at, TLG_JS_FINGERPRINT_BYTES) ||
         !tlg_js_100_signature_match(image, size)) {
         puts("Js native bridge: 01.00 DrawIndexedCommon signature mismatch; disabled");
         return;
