@@ -97,19 +97,29 @@ int main() {
     // transfer + shader-read layout barrier has been recorded.
     ResourceRegistry::SampledBinding sampled{};
     assert(!gpu.TryResolveSampledBinding(0x901,0x902,sampled));
+    ResourceRegistry::SampledIdentity native_identity{};
+    assert(!gpu.TryResolveSampledImage(0x901,native_identity));
+    assert(!gpu.TryResolveSampler(0x902,native_identity));
     assert(!gpu.RegisterSampledImage(0,101));
     assert(!gpu.RegisterSampler(0,202));
     assert(gpu.RegisterSampledImage(0x901,101));
     assert(gpu.RegisterSampler(0x902,202));
     assert(!gpu.TryResolveSampledBinding(0x901,0x902,sampled));
+    assert(!gpu.TryResolveSampledImage(0x901,native_identity));
+    assert(gpu.TryResolveSampler(0x902,native_identity));
+    assert(native_identity.vk_handle==202 && native_identity.generation!=0);
     assert(!gpu.MarkSampledImageReady(0x901,999)); // different image identity
     assert(gpu.MarkSampledImageReady(0x901,101));
     assert(gpu.TryResolveSampledBinding(0x901,0x902,sampled));
     assert(sampled.image_view==101 && sampled.sampler==202);
     const auto first_image_generation=sampled.image_generation;
     const auto first_sampler_generation=sampled.sampler_generation;
+    assert(gpu.TryResolveSampledImage(0x901,native_identity));
+    assert(native_identity.vk_handle==101 &&
+           native_identity.generation==first_image_generation);
     assert(gpu.RegisterSampledImage(0x901,303)); // old view invalidated
     assert(!gpu.TryResolveSampledBinding(0x901,0x902,sampled));
+    assert(!gpu.TryResolveSampledImage(0x901,native_identity));
     assert(!gpu.MarkSampledImageReady(0x901,101));
     assert(gpu.MarkSampledImageReady(0x901,303));
     assert(gpu.TryResolveSampledBinding(0x901,0x902,sampled));
@@ -118,8 +128,13 @@ int main() {
     assert(gpu.RegisterSampler(0x902,404));
     assert(gpu.TryResolveSampledBinding(0x901,0x902,sampled));
     assert(sampled.sampler==404 && sampled.sampler_generation>first_sampler_generation);
+    assert(gpu.TryResolveSampler(0x902,native_identity));
+    assert(native_identity.vk_handle==404 &&
+           native_identity.generation==sampled.sampler_generation);
     gpu.UnregisterSampledImage(0x901);
+    assert(!gpu.TryResolveSampledImage(0x901,native_identity));
     assert(!gpu.TryResolveSampledBinding(0x901,0x902,sampled));
     gpu.UnregisterSampler(0x902);
+    assert(!gpu.TryResolveSampler(0x902,native_identity));
     return 0;
 }

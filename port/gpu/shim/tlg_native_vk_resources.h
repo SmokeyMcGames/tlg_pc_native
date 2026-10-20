@@ -117,6 +117,31 @@ public:
         std::uint64_t image_generation = 0;
         std::uint64_t sampler_generation = 0;
     };
+    // Return only live, ready native identities. The caller must also match
+    // the exact observed generation against its independently verified Js
+    // binding snapshot; reusing a guest address cannot reuse an old view.
+    struct SampledIdentity {
+        std::uint64_t vk_handle = 0;
+        std::uint64_t generation = 0;
+    };
+    bool TryResolveSampledImage(std::uint64_t guest, SampledIdentity& out) const {
+        std::scoped_lock lock{mutex_};
+        auto it = sampled_images_.find(guest);
+        if (it == sampled_images_.end() || !it->second.shader_readable ||
+            !it->second.vk_handle)
+            return false;
+        out = {it->second.vk_handle, it->second.generation};
+        return true;
+    }
+    bool TryResolveSampler(std::uint64_t guest, SampledIdentity& out) const {
+        std::scoped_lock lock{mutex_};
+        auto it = samplers_.find(guest);
+        if (it == samplers_.end() || !it->second.shader_readable ||
+            !it->second.vk_handle)
+            return false;
+        out = {it->second.vk_handle, it->second.generation};
+        return true;
+    }
     bool TryResolveSampledBinding(std::uint64_t image_guest,
                                   std::uint64_t sampler_guest,
                                   SampledBinding& out) const {

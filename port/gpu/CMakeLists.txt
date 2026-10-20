@@ -522,6 +522,12 @@ add_executable(native-descriptor-layout-test EXCLUDE_FROM_ALL
 target_compile_features(native-descriptor-layout-test PRIVATE cxx_std_23)
 target_compile_options(native-descriptor-layout-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 
+# Exact Js guest-object bindings and resource generations, driver-free.
+add_executable(native-descriptor-bindings-test EXCLUDE_FROM_ALL
+    ../tests/test_native_descriptor_bindings.cpp)
+target_compile_features(native-descriptor-bindings-test PRIVATE cxx_std_23)
+target_compile_options(native-descriptor-bindings-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
 # Driver- and specialization-keyed pretranslated SPIR-V cache regression.
 add_executable(native-spirv-registry-test EXCLUDE_FROM_ALL
     ../tests/test_native_spirv_registry.cpp)
