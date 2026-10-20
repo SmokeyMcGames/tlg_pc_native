@@ -18,5 +18,25 @@ int main() {
     command[1] = 300u;
     b.Publish(command);
     assert(b.TryTake(command));
+    std::uint32_t indexed[] = {0xc0032d00u, 700u, 12u, 700u, 0u};
+    b.Publish(indexed, TlgNativeDraw::Bridge::Kind::DrawIndexed,
+              TlgNativeDraw::Bridge::IndexedWords);
+    assert(!b.TryTake(indexed, TlgNativeDraw::Bridge::Kind::DispatchDirect,
+                      TlgNativeDraw::Bridge::IndexedWords)); // type mismatch
+    b.Publish(indexed, TlgNativeDraw::Bridge::Kind::DrawIndexed,
+              TlgNativeDraw::Bridge::IndexedWords);
+    assert(b.TryTake(indexed, TlgNativeDraw::Bridge::Kind::DrawIndexed,
+                     TlgNativeDraw::Bridge::IndexedWords));
+    std::uint32_t dispatch[] = {0xc0031502u, 8u, 1u, 1u, 1u};
+    b.Publish(dispatch, TlgNativeDraw::Bridge::Kind::DispatchDirect,
+              TlgNativeDraw::Bridge::DispatchWords);
+    dispatch[3] += 1;
+    assert(!b.TryTake(dispatch, TlgNativeDraw::Bridge::Kind::DispatchDirect,
+                      TlgNativeDraw::Bridge::DispatchWords)); // altered payload
+    dispatch[3] -= 1;
+    b.Publish(dispatch, TlgNativeDraw::Bridge::Kind::DispatchDirect,
+              TlgNativeDraw::Bridge::DispatchWords);
+    assert(b.TryTake(dispatch, TlgNativeDraw::Bridge::Kind::DispatchDirect,
+                     TlgNativeDraw::Bridge::DispatchWords));
     return 0;
 }
