@@ -16,6 +16,15 @@ namespace Shader { struct RuntimeInfo; struct Profile; }
 
 namespace TlgNativeVk {
 struct GcnShaderInput;
+enum class NativeDescriptorKind : std::uint32_t {
+    StorageBuffer = 1, SampledImage = 2, StorageImage = 3, Sampler = 4,
+};
+struct NativeDescriptorBinding {
+    std::uint32_t binding = 0;
+    std::uint32_t descriptor_count = 1;
+    NativeDescriptorKind kind = NativeDescriptorKind::StorageBuffer;
+};
+
 struct NativeShaderKey;
 class NativeShaderRegistry;
 class DeviceResources {
@@ -60,8 +69,9 @@ public:
 
     // Dedicated, descriptor-free native Vulkan compute pipeline. Compute
     // handles are type-tagged and cannot pass graphics draw validation.
-    bool CreateComputePipeline(std::uint64_t guest_id,
-                               std::span<const std::uint32_t> compute_spirv);
+    bool CreateComputePipeline(
+        std::uint64_t guest_id, std::span<const std::uint32_t> compute_spirv,
+        std::span<const NativeDescriptorBinding> resource_bindings = {});
     bool CreateResourceFreeComputePipelineFromGCN(
         std::uint64_t guest_id, const GcnShaderInput& compute,
         const Shader::RuntimeInfo& runtime, const Shader::Profile& profile);
@@ -71,6 +81,8 @@ public:
     void RetireComputePipeline(std::uint64_t guest_id);
     bool QueryComputePipeline(std::uint64_t guest_id,
                               std::uint64_t& vk_handle) const;
+    bool QueryComputePipelineLayout(std::uint64_t guest_id,
+                                    std::uint64_t& vk_layout) const;
 
     bool CreateIndexBuffer(std::uint64_t guest_id, std::uint64_t index_count,
                            std::uint32_t index_width, const void* initial_data,
