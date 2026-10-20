@@ -130,3 +130,24 @@ first safely instrumented interception point, not the complete milestone.
 The last four steps require substantial engine reverse engineering, source
 implementation, Windows and Linux builds, and gameplay validation. Full native
 renderer replacement has **not** been completed in this branch.
+
+
+## GPU phase D — high-level draw command delivery to Vulkan (shadow)
+
+`TLG_JS_NATIVE_TRACE=1` on a signature-matched v01.00 executable now
+captures each high-level `DrawIndexedCommon` /
+`DrawIndexedInstanced` call into a bounded 4096-entry,
+64-byte-per-record command stream using only guest-entry assembly. The
+hook saves and restores all scratch registers and flags; SIMD state is untouched.
+Records contain raw `rdi` (context), `rsi`,
+`rdx`, `rcx`, `r8`, and
+`r9` values. The existing native `tlggpu` library accepts the
+buffer through a C ABI and the GPU command thread drains it in submission order,
+logging totals every five seconds.
+
+This is **best-effort diagnostic telemetry**, NOT a reliable draw submission
+queue or a complete native renderer. The stream drops overwritten records and
+never waits for a producer. Actual Vulkan draw execution and GPU resources are
+still owned by the unchanged legacy backend. The next technical milestone is
+to associate these high-level records with live shader/resource state and
+produce Vulkan commands from them, guarded by visual and fence parity tests.

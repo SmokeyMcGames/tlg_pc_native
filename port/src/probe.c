@@ -13,6 +13,7 @@
 #include "actor_hook.h"
 #include "damage_hook.h"
 #include "native_js_bridge.h"
+#include "native_js_commands.h"
 #include "gpu/tlggpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
@@ -749,6 +750,10 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
  * A 14-byte absolute jump replaces only a verified, relocation-free prologue.
  */
 #if defined(__x86_64__)
+/* Ring producers run directly in the guest-entry assembly with no C call.
+ * This avoids touching SIMD arguments, changing the guest stack alignment,
+ * or depending on Windows vs SysV host calling conventions. */
+__attribute__((used, aligned(64))) TlgJsNativeRing tlg_js_native_ring;
 __attribute__((used)) uintptr_t tlg_js_indexed_gateway;
 __attribute__((used)) uintptr_t tlg_js_instanced_gateway;
 __attribute__((used)) volatile uint64_t tlg_js_trace_instanced_calls;
@@ -769,6 +774,29 @@ static void tlg_js_indexed_entry(void) {
         "movq %rsi, tlg_js_trace_last_arg1(%rip)\n\t"
         "movq %rdx, tlg_js_trace_last_arg2(%rip)\n\t"
         "movq %rcx, tlg_js_trace_last_arg3(%rip)\n\t"
+        "pushq %rax\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "leaq tlg_js_native_ring(%rip), %r10\n\t"
+        "movq $1, %rax\n\t"
+        "lock xaddq %rax, (%r10)\n\t"
+        "leaq 1(%rax), %r11\n\t"
+        "andq $4095, %rax\n\t"
+        "shlq $6, %rax\n\t"
+        "addq $64, %r10\n\t"
+        "addq %rax, %r10\n\t"
+        "movq $0, (%r10)\n\t"
+        "movq 1, 8(%r10)\n\t"
+        "movq %rdi, 16(%r10)\n\t"
+        "movq %rsi, 24(%r10)\n\t"
+        "movq %rdx, 32(%r10)\n\t"
+        "movq %rcx, 40(%r10)\n\t"
+        "movq %r8, 48(%r10)\n\t"
+        "movq %r9, 56(%r10)\n\t"
+        "movq %r11, (%r10)\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %rax\n\t"
         "popfq\n\t"
         "jmp *tlg_js_indexed_gateway(%rip)\n\t"
     );
@@ -782,6 +810,29 @@ static void tlg_js_instanced_entry(void) {
         "pushfq\n\t"
         "lock incq tlg_js_trace_instanced_calls(%rip)\n\t"
         "movq %rdi, tlg_js_trace_instanced_last_context(%rip)\n\t"
+        "pushq %rax\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "leaq tlg_js_native_ring(%rip), %r10\n\t"
+        "movq $1, %rax\n\t"
+        "lock xaddq %rax, (%r10)\n\t"
+        "leaq 1(%rax), %r11\n\t"
+        "andq $4095, %rax\n\t"
+        "shlq $6, %rax\n\t"
+        "addq $64, %r10\n\t"
+        "addq %rax, %r10\n\t"
+        "movq $0, (%r10)\n\t"
+        "movq 2, 8(%r10)\n\t"
+        "movq %rdi, 16(%r10)\n\t"
+        "movq %rsi, 24(%r10)\n\t"
+        "movq %rdx, 32(%r10)\n\t"
+        "movq %rcx, 40(%r10)\n\t"
+        "movq %r8, 48(%r10)\n\t"
+        "movq %r9, 56(%r10)\n\t"
+        "movq %r11, (%r10)\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %rax\n\t"
         "popfq\n\t"
         "jmp *tlg_js_instanced_gateway(%rip)\n\t"
     );
@@ -834,6 +885,7 @@ static void install_js_native_trace(const char *app0, Segment *segments,
     __atomic_thread_fence(__ATOMIC_RELEASE);
     tlg_js_write_absolute_jump(image + indexed, (uintptr_t)tlg_js_indexed_entry);
     tlg_js_write_absolute_jump(image + instanced, (uintptr_t)tlg_js_instanced_entry);
+    tlggpu_native_js_attach(&tlg_js_native_ring);
     tlg_js_trace_enabled = 1;
     runtime_set_report_hook(isa_report_hook);
     printf("Js native bridge: v01.00 DrawIndexedCommon at +0x%llx and "
