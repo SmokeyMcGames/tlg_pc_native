@@ -59,6 +59,50 @@ int main() {
     assert(cache.ResidentBytes()==0);
     assert(!cache.Find(key));
     assert(retained->spirv==spirv && newer->spirv==bigger);
+
+    // The descriptor-enabled cache must preserve layouts, stage offsets
+    // and retained lifetimes, and reject an incompatible fragment layout.
+    NativeShaderRegistry layout_cache(2048);
+    auto vs_key = Key(0x600);
+    vs_key.stage = NativeShaderStage::Vertex;
+    auto fs_key = Key(0x601);
+    fs_key.stage = NativeShaderStage::Fragment;
+    std::vector<NativeDescriptorBinding> vs_descriptors{
+        {0, 1, NativeDescriptorKind::StorageBuffer},
+        {1, 1, NativeDescriptorKind::SampledImage},
+    };
+    std::vector<NativeDescriptorBinding> fs_descriptors{
+        {2, 1, NativeDescriptorKind::Sampler},
+    };
+    assert(!layout_cache.Publish(vs_key,spirv,true,fs_descriptors));
+    assert(layout_cache.Publish(vs_key,spirv,true,vs_descriptors));
+    assert(!layout_cache.Publish(fs_key,spirv,true,fs_descriptors,0));
+    assert(layout_cache.Publish(fs_key,spirv,true,fs_descriptors,2));
+    auto native_vs = layout_cache.Find(vs_key);
+    auto native_fs = layout_cache.Find(fs_key);
+    assert(native_vs && native_fs);
+    assert(native_fs->first_binding == 2 &&
+           native_fs->descriptors == fs_descriptors);
+    std::vector<NativeDescriptorBinding> linked;
+    assert(AssembleCachedGraphicsDescriptors(*native_vs,*native_fs,linked));
+    assert(linked.size()==3 && linked.back().binding==2);
+    const std::size_t layout_occupancy = spirv.size_bytes()*2 +
+        (vs_descriptors.size()+fs_descriptors.size())*
+            sizeof(NativeDescriptorBinding);
+    assert(layout_cache.ResidentBytes()==layout_occupancy);
+    auto failed_fs = *native_fs;
+    failed_fs.first_binding = 1;
+    assert(!AssembleCachedGraphicsDescriptors(*native_vs,failed_fs,linked));
+    assert(linked.empty());
+    failed_fs = *native_fs;
+    failed_fs.descriptors[0].binding = 3;
+    assert(!AssembleCachedGraphicsDescriptors(*native_vs,failed_fs,linked));
+    assert(linked.empty());
+    layout_cache.Retire(fs_key.guest_id);
+    assert(native_fs->descriptors==fs_descriptors); // immutable old lifetime
+    assert(layout_cache.ResidentBytes()==spirv.size_bytes() +
+        vs_descriptors.size()*sizeof(NativeDescriptorBinding));
+
     auto invalid=Key(0x345);
     invalid.game_binary_hash=0;
     assert(!cache.Publish(invalid,spirv,true));

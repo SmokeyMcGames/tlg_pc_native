@@ -379,6 +379,14 @@ descriptor-free shaders. `native-descriptor-layout-test` exercises contiguous
 bindings, multi-stage offsets, array counts and rejected malformed layouts
 without requiring Vulkan.
 
+The driver/specialization-keyed immutable SPIR-V cache now also stores the
+verified, ordered descriptor layout and per-stage absolute binding start.
+Cached graphics pipelines join vertex and fragment descriptor layouts
+explicitly; cached compute pipelines use the saved compute descriptors.
+A missing/wrong stage offset refuses reuse instead of silently creating an
+incompatible empty-layout Vulkan pipeline. Descriptor metadata contributes
+to the cache's memory budget.
+
 **Important:** This is shader-to-SPIR-V plus pipeline-layout integration, **not
 gameplay rendering**. The game's CreatePixelShader and CreateShaderResourceView
 hooks still observe opaque inputs. Live guest resource identities, shader

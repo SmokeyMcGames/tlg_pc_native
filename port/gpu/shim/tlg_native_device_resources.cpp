@@ -291,9 +291,10 @@ bool DeviceResources::CreateComputePipelineFromCachedSpirv(
     if (key.stage != NativeShaderStage::Compute)
         return false;
     const auto shader = cache.Find(key);
-    if (!shader)
+    if (!shader || shader->first_binding != 0 ||
+        !ValidNativeDescriptorLayout(shader->descriptors))
         return false;
-    return CreateComputePipeline(guest, shader->spirv);
+    return CreateComputePipeline(guest, shader->spirv, shader->descriptors);
 }
 
 bool DeviceResources::QueryComputePipelineLayout(
@@ -342,10 +343,12 @@ bool DeviceResources::CreateGraphicsPipelineFromCachedSpirv(
     const auto fs = cache.Find(fs_key);
     if (!vs || !fs)
         return false;
-    // Each shared_ptr keeps its SPIR-V memory immutable and alive throughout
-    // Vulkan pipeline creation, even if the guest concurrently retires the
-    // underlying shader object.
-    return CreateGraphicsPipeline(guest, vs->spirv, fs->spirv, format);
+    std::vector<NativeDescriptorBinding> layout;
+    if (!AssembleCachedGraphicsDescriptors(*vs, *fs, layout))
+        return false;
+    // Each shared_ptr keeps its SPIR-V and descriptor metadata immutable and
+    // alive throughout Vulkan pipeline creation, even if the guest retires it.
+    return CreateGraphicsPipeline(guest, vs->spirv, fs->spirv, format, layout);
 }
 
 bool DeviceResources::CreateResourceFreeGraphicsPipelineFromGCN(
