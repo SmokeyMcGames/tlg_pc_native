@@ -13,8 +13,6 @@
 
 > **No game files come with this project.** To play, you need your own copy, dumped from your own PS4.
 
-By **HayatoG** · YouTube [@hayatog-dev](https://www.youtube.com/@hayatog-dev) · Discord [discord.gg/UMkdMYZh9g](https://discord.gg/UMkdMYZh9g)
-
 The screenshots and the performance chart are at the top of this page.
 
 ## What's new
