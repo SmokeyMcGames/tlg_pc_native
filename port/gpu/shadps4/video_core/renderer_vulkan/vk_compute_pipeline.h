@@ -50,7 +50,14 @@ public:
                     vk::ShaderModule module, SerializationSupport& sdata, bool preloading);
     ~ComputePipeline();
 
+    // Candidate *shapes* known at pipeline construction, not dynamic guest memory.
+    // Each candidate still passes the original resource/state safety checks at dispatch.
+    enum NativeCandidate : u8 { ImageCopy = 1, MetaClear = 2, ImageClear = 4 };
+    u8 NativeCandidates() const noexcept { return native_candidates; }
+
 private:
+    u8 native_candidates{};
+
     ComputePipelineKey compute_key;
 };
 
