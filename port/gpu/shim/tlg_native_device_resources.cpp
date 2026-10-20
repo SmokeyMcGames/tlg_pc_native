@@ -601,6 +601,294 @@ bool DeviceResources::UpdateIndexBuffer(std::uint64_t id, std::uint64_t first,
     return true;
 }
 
+bool DeviceResources::CreateSampledTextureRGBA8(
+    std::uint64_t guest, std::uint32_t width, std::uint32_t height,
+    const void* source, std::uint64_t source_pitch,
+    std::uint64_t source_available_bytes) {
+    LinearRgba8 layout{};
+    if (!guest || !ValidateLinearRgba8(width, height, source_pitch,
+                                        source_available_bytes, source, layout))
+        return false;
+    const VkImageCreateInfo image_ci{
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_2D,
+        .format = VK_FORMAT_R8G8B8A8_UNORM,
+        .extent = {width, height, 1},
+        .mipLevels = 1,
+        .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT,
+        .tiling = VK_IMAGE_TILING_OPTIMAL,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    const VmaAllocationCreateInfo gpu_alloc_ci{
+        .flags = VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
+    };
+    auto resource = std::make_unique<State::SampledTexture>();
+    if (vmaCreateImage(state_->allocator, &image_ci, &gpu_alloc_ci,
+                       &resource->gpu, &resource->allocation, nullptr) != VK_SUCCESS)
+        return false;
+    resource->width = width;
+    resource->height = height;
+
+    const vk::ImageViewCreateInfo view_ci{
+        .image = vk::Image{resource->gpu},
+        .viewType = vk::ImageViewType::e2D,
+        .format = vk::Format::eR8G8B8A8Unorm,
+        .subresourceRange = {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        },
+    };
+    auto [view_result, view] =
+        state_->instance.GetDevice().createImageViewUnique(view_ci);
+    if (view_result != vk::Result::eSuccess || !view) {
+        state_->Destroy(*resource);
+        return false;
+    }
+    resource->view = std::move(view);
+
+    // Copy guest-owned linear bytes NOW into a private host-visible upload
+    // buffer. No original guest pointer survives into the GPU command thread.
+    const VkBufferCreateInfo staging_ci{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = layout.total_bytes,
+        .usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    const VmaAllocationCreateInfo staging_alloc_ci{
+        .flags = VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                 VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                 VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+    };
+    VmaAllocationInfo staging_info{};
+    if (vmaCreateBuffer(state_->allocator, &staging_ci, &staging_alloc_ci,
+                        &resource->staging, &resource->staging_allocation,
+                        &staging_info) != VK_SUCCESS) {
+        state_->Destroy(*resource);
+        return false;
+    }
+    if (!staging_info.pMappedData) {
+        state_->Destroy(*resource);
+        return false;
+    }
+    CopyRgba8Rows(staging_info.pMappedData, source, layout, source_pitch);
+    if (vmaFlushAllocation(state_->allocator, resource->staging_allocation,
+                           0, layout.total_bytes) != VK_SUCCESS) {
+        state_->Destroy(*resource);
+        return false;
+    }
+    if (!resource->state.Allocate()) {
+        state_->Destroy(*resource);
+        return false;
+    }
+
+    // Retire old image on replacement; never overwrite an in-flight VkImage.
+    std::scoped_lock lock{state_->mutex};
+    const auto view_handle =
+        Identity(static_cast<VkImageView>(*resource->view));
+    if (!state_->registry.RegisterSampledImage(guest, view_handle)) {
+        state_->Destroy(*resource);
+        return false;
+    }
+    if (auto it = state_->sampled_textures.find(guest);
+        it != state_->sampled_textures.end()) {
+        state_->sampled_retired.push_back(std::move(it->second));
+        it->second = std::move(resource);
+    } else {
+        state_->sampled_textures.emplace(guest, std::move(resource));
+    }
+    return true;
+}
+
+bool DeviceResources::RecordSampledTextureUpload(
+    std::uint64_t guest, Vulkan::Scheduler& scheduler) {
+    // Called only from the GPU ownership thread, in command-submission
+    // order. A texture is NOT bindable before both transfer and layout
+    // transition have been enqueued on this same Vulkan scheduler.
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->sampled_textures.find(guest);
+    if (it == state_->sampled_textures.end() ||
+        !it->second->state.BeginUpload())
+        return false;
+    const auto& texture = *it->second;
+    const vk::Image image{texture.gpu};
+    const vk::Buffer staging{texture.staging};
+    const auto width = texture.width;
+    const auto height = texture.height;
+
+    scheduler.EndRendering();
+    scheduler.Record([image, staging, width, height](vk::CommandBuffer cmd) {
+        const vk::BufferMemoryBarrier2 host_to_copy{
+            .srcStageMask = vk::PipelineStageFlagBits2::eHost,
+            .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferRead,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .buffer = staging,
+            .offset = 0,
+            .size = std::uint64_t(width) * height * 4u,
+        };
+        const vk::ImageMemoryBarrier2 to_transfer{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+            .srcAccessMask = vk::AccessFlags2{},
+            .dstStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .dstAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eTransferDstOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+        const vk::DependencyInfo start{
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &host_to_copy,
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &to_transfer,
+        };
+        cmd.pipelineBarrier2(start);
+        const vk::BufferImageCopy copy{
+            .bufferOffset = 0,
+            .bufferRowLength = 0,
+            .bufferImageHeight = 0,
+            .imageSubresource = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .mipLevel = 0,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+            .imageOffset = {0, 0, 0},
+            .imageExtent = {width, height, 1},
+        };
+        cmd.copyBufferToImage(staging, image, vk::ImageLayout::eTransferDstOptimal,
+                              copy);
+        const vk::ImageMemoryBarrier2 to_shader{
+            .srcStageMask = vk::PipelineStageFlagBits2::eTransfer,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eAllGraphics |
+                            vk::PipelineStageFlagBits2::eComputeShader,
+            .dstAccessMask = vk::AccessFlagBits2::eShaderRead,
+            .oldLayout = vk::ImageLayout::eTransferDstOptimal,
+            .newLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = image,
+            .subresourceRange = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+        const vk::DependencyInfo finish{
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &to_shader,
+        };
+        cmd.pipelineBarrier2(finish);
+    });
+    // This is *submission-order* readiness. The GPU may still be executing
+    // the upload, but a subsequent Vk draw on this scheduler executes after
+    // the transfer and its visibility barrier.
+    if (!it->second->state.MarkShaderReadable())
+        return false;
+    return state_->registry.MarkSampledImageReady(
+        guest, Identity(static_cast<VkImageView>(*it->second->view)));
+}
+
+bool DeviceResources::CreateNearestClampSampler(std::uint64_t guest) {
+    if (!guest) return false;
+    const vk::SamplerCreateInfo ci{
+        .magFilter = vk::Filter::eNearest,
+        .minFilter = vk::Filter::eNearest,
+        .mipmapMode = vk::SamplerMipmapMode::eNearest,
+        .addressModeU = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeV = vk::SamplerAddressMode::eClampToEdge,
+        .addressModeW = vk::SamplerAddressMode::eClampToEdge,
+        .maxAnisotropy = 1.0f,
+        .minLod = 0.0f,
+        .maxLod = 0.0f,
+    };
+    auto [result, handle] =
+        state_->instance.GetDevice().createSamplerUnique(ci);
+    if (result != vk::Result::eSuccess || !handle)
+        return false;
+    const auto identity = Identity(static_cast<VkSampler>(*handle));
+    auto resource = std::make_unique<State::NativeSampler>();
+    resource->handle = std::move(handle);
+    std::scoped_lock lock{state_->mutex};
+    if (!state_->registry.RegisterSampler(guest, identity))
+        return false;
+    if (auto it = state_->native_samplers.find(guest);
+        it != state_->native_samplers.end()) {
+        state_->samplers_retired.push_back(std::move(it->second));
+        it->second = std::move(resource);
+    } else {
+        state_->native_samplers.emplace(guest, std::move(resource));
+    }
+    return true;
+}
+
+bool DeviceResources::QuerySampledBinding(
+    std::uint64_t texture_id, std::uint64_t sampler_id,
+    SampledImageInfo& output) const {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->sampled_textures.find(texture_id);
+    const auto sampler = state_->native_samplers.find(sampler_id);
+    if (it == state_->sampled_textures.end() ||
+        sampler == state_->native_samplers.end() ||
+        !it->second->state.Ready(it->second->state.Generation()))
+        return false;
+    ResourceRegistry::SampledBinding binding{};
+    if (!state_->registry.TryResolveSampledBinding(texture_id, sampler_id, binding))
+        return false;
+    if (binding.image_view !=
+        Identity(static_cast<VkImageView>(*it->second->view)) ||
+        binding.sampler !=
+        Identity(static_cast<VkSampler>(*sampler->second->handle)))
+        return false;
+    output = {
+        .image_view = binding.image_view,
+        .sampler = binding.sampler,
+        .width = it->second->width,
+        .height = it->second->height,
+        .image_generation = binding.image_generation,
+        .sampler_generation = binding.sampler_generation,
+    };
+    return true;
+}
+
+void DeviceResources::RetireSampledTexture(std::uint64_t guest) {
+    std::scoped_lock lock{state_->mutex};
+    auto it = state_->sampled_textures.find(guest);
+    if (it == state_->sampled_textures.end()) return;
+    state_->registry.UnregisterSampledImage(guest);
+    state_->sampled_retired.push_back(std::move(it->second));
+    state_->sampled_textures.erase(it);
+}
+void DeviceResources::RetireSampler(std::uint64_t guest) {
+    std::scoped_lock lock{state_->mutex};
+    auto it = state_->native_samplers.find(guest);
+    if (it == state_->native_samplers.end()) return;
+    state_->registry.UnregisterSampler(guest);
+    state_->samplers_retired.push_back(std::move(it->second));
+    state_->native_samplers.erase(it);
+}
+
 bool DeviceResources::CreateColorTarget(std::uint64_t guest,
                                         std::uint32_t width, std::uint32_t height,
                                         std::uint32_t format) {
