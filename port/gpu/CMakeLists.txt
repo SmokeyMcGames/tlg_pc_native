@@ -478,3 +478,13 @@ endif()
 add_executable(native-js-bridge-test EXCLUDE_FROM_ALL ../tests/test_native_js_bridge.c)
 target_compile_features(native-js-bridge-test PRIVATE c_std_11)
 target_compile_options(native-js-bridge-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Native Js semantic draw stream: standalone capture & GPU consumer tests.
+# They deliberately require no Vulkan device, shader cache or proprietary game data.
+add_executable(native-js-command-test EXCLUDE_FROM_ALL ../tests/test_native_js_commands.c)
+set_target_properties(native-js-command-test PROPERTIES C_STANDARD 11 C_EXTENSIONS OFF)
+target_compile_options(native-js-command-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+add_executable(native-js-shadow-test EXCLUDE_FROM_ALL
+    ../tests/test_native_js_shadow.cpp shim/tlg_js_shadow.cpp)
+target_compile_features(native-js-shadow-test PRIVATE cxx_std_23)
+target_compile_options(native-js-shadow-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
