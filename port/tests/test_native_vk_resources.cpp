@@ -36,6 +36,26 @@ int main() {
     assert(!gpu.Bind(0x111,0x101,0x200,0x300,0,17));
     assert(gpu.RegisterIndexBuffer(0x200,555,512));
     assert(gpu.RegisterTargetSet(0x300,777));
+    // A real non-indexed Js Draw only needs pipeline, framebuffer and
+    // independently verified vertex-fetch state (not an index buffer).
+    const TlgJsNativeCommand ordinary_event{
+        .ready=77, .kind=TLG_JS_NATIVE_DRAW, .context=0x333,
+        .arg0=6, .arg1=4,
+    };
+    TlgJsNativeNonIndexedCandidate ordinary{};
+    assert(tlg_js_native_decode_nonindexed(&ordinary_event,&ordinary));
+    assert(!gpu.BindNonIndexed(0x333,0x100,0x300,false));
+    assert(gpu.BindNonIndexed(0x333,0x100,0x300,true));
+    assert(!gpu.TryResolveNonIndexed(ordinary,output)); // missing barrier
+    assert(gpu.AcknowledgeBarriers(0x333,1));
+    assert(gpu.TryResolveNonIndexed(ordinary,output));
+    assert(!output.command.indexed && output.command.vertex_or_index_count==6);
+    assert(output.command.first_vertex==4 && output.index_buffer==0);
+    assert(output.pipeline==33 && output.target_set==777);
+    gpu.Unbind(0x333);
+    assert(!gpu.TryResolveNonIndexed(ordinary,output));
+    // A compute VkPipeline must never satisfy the graphics draw bind.
+    assert(!gpu.BindNonIndexed(0x333,0x101,0x300,true));
     assert(!gpu.Bind(0x111,0x100,0x222,0x300,0,17));
     assert(gpu.Bind(0x111,0x100,0x200,0x300,0,17));
     assert(!gpu.TryResolve(game,output)); // barrier must be recorded separately
