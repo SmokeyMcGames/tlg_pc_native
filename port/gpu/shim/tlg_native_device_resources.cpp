@@ -13,6 +13,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include <new>
 
 namespace TlgNativeVk {
 namespace {
@@ -663,6 +664,34 @@ bool DeviceResources::UpdateIndexBuffer(std::uint64_t id, std::uint64_t first,
     state_->retired.push_back(old);
     state_->registry.NoteBufferWrite(id, epoch);
     return true;
+}
+
+bool DeviceResources::CreateSampledTexture1DTiledRgba8(
+    std::uint64_t guest, std::uint32_t width, std::uint32_t height,
+    std::uint32_t tiled_pitch, std::uint32_t tiled_height,
+    Rgba8Tiling mode, const void* source, std::uint64_t available_bytes) {
+    DetileRgba8Layout layout{};
+    if (!guest || !Validate1DTiledRgba8(
+            width, height, tiled_pitch, tiled_height, available_bytes,
+            source, mode, layout))
+        return false;
+    // The PS4 source pointer is NOT retained: detile immediately into owned
+    // memory, then let CreateSampledTextureRGBA8 copy that into private VMA
+    // staging. The source can be freed by the game immediately afterward.
+    // Future streaming optimization may detile directly to VMA staging.
+    try {
+        std::vector<std::uint8_t> linear(
+            static_cast<std::size_t>(layout.visible.total_bytes));
+        Detile1DRgba8(linear.data(), source, layout);
+        return CreateSampledTextureRGBA8(
+            guest, layout.visible.width, layout.visible.height,
+            linear.data(), layout.visible.row_bytes,
+            static_cast<std::uint64_t>(linear.size()));
+    } catch (const std::bad_alloc&) {
+        // A failed staging allocation must leave existing native resource
+        // generations and the original PS4 renderer untouched.
+        return false;
+    }
 }
 
 bool DeviceResources::CreateSampledTextureRGBA8(
