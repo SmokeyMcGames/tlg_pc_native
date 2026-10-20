@@ -501,3 +501,9 @@ target_compile_options(native-vk-draw-test PRIVATE -UNDEBUG -Wall -Wextra -Werro
 add_executable(native-vk-resources-test EXCLUDE_FROM_ALL ../tests/test_native_vk_resources.cpp)
 target_compile_features(native-vk-resources-test PRIVATE cxx_std_23)
 target_compile_options(native-vk-resources-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Verified v01.00 game-level JsDevice resource-construction interception.
+add_executable(native-js-buffer-hook-test EXCLUDE_FROM_ALL
+    ../tests/test_native_js_buffer_hook.c)
+target_compile_features(native-js-buffer-hook-test PRIVATE c_std_11)
+target_compile_options(native-js-buffer-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
