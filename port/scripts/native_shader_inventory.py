@@ -200,7 +200,7 @@ def main(argv=None):
         'skipped_shader_assets': skipped,
         'note': 'inventory only; GCN -> SPIR-V still needs resource-specialized translation',
     }
-    payload = json.dumps(manifest, indent=2) + '\\n'
+    payload = json.dumps(manifest, indent=2) + '\n'
     if args.out:
         args.out.parent.mkdir(parents=True, exist_ok=True)
         args.out.write_text(payload, encoding='utf-8')
