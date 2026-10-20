@@ -962,7 +962,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 const auto* prepared = draw_prep ? draw_prep->NextDraw() : nullptr;
                 // Validated high-level hint: invoke the Vulkan rasterizer directly.
                 // Unknown/modified commands continue through the original scoped path.
-                if (count == TlgNativeDraw::Bridge::PacketWords &&
+                if (count + 1 == TlgNativeDraw::Bridge::PacketWords &&
                     TlgNativeDraw::Get().TryTake(reinterpret_cast<const u32*>(header))) {
                     rasterizer->Draw(false, 0, prepared);
                 } else {
