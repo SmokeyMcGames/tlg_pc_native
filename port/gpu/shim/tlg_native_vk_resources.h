@@ -94,10 +94,10 @@ public:
         return Register(sampled_images_, guest, image_view, 0);
     }
     bool RegisterSampler(std::uint64_t guest, std::uint64_t vk_sampler) {
-        if (!Register(samplers_, guest, vk_sampler, 0)) return false;
-        std::scoped_lock lock{mutex_};
-        samplers_[guest].shader_readable = true;
-        return true;
+        // Single atomic registry publication; no interval in which another
+        // GPU owner could retire the object before readiness was set.
+        return Register(samplers_, guest, vk_sampler, 0,
+                        NativePipelineKind::None, true);
     }
     void UnregisterSampledImage(std::uint64_t guest) { Remove(sampled_images_, guest); }
     void UnregisterSampler(std::uint64_t guest) { Remove(samplers_, guest); }
@@ -297,7 +297,8 @@ private:
     using Table = std::unordered_map<std::uint64_t, NativeResource>;
     bool Register(Table& table, std::uint64_t guest, std::uint64_t handle,
                   std::uint64_t capacity,
-                  NativePipelineKind pipeline_kind = NativePipelineKind::None) {
+                  NativePipelineKind pipeline_kind = NativePipelineKind::None,
+                  bool shader_readable = false) {
         if (!guest || !handle) return false;
         std::scoped_lock lock{mutex_};
         if (pipeline_kind != NativePipelineKind::None) {
@@ -314,7 +315,7 @@ private:
             .capacity = capacity,
             .write_epoch = 0,
             .pipeline_kind = pipeline_kind,
-            .shader_readable = false,
+            .shader_readable = shader_readable,
         };
         return true;
     }
