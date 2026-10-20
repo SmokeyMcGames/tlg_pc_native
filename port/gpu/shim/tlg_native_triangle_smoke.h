@@ -6,10 +6,11 @@
 namespace Vulkan { class Instance; class Scheduler; }
 namespace TlgNativeVk {
 class DeviceResources;
+class ResourceRegistry;
 class TriangleSmoke {
 public:
     TriangleSmoke(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
-                  DeviceResources& resources);
+                  DeviceResources& resources, ResourceRegistry& registry);
     ~TriangleSmoke();
     TriangleSmoke(const TriangleSmoke&) = delete;
     TriangleSmoke& operator=(const TriangleSmoke&) = delete;
