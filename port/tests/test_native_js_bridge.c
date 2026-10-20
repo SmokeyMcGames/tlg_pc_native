@@ -44,8 +44,8 @@ int main(void) {
     uint8_t *fake = (uint8_t *)calloc(n, 1);
     assert(fake);
     assert(!tlg_js_100_signature_match(fake, n));
-    memcpy(fake + TLG_JS_100_INDEXED_ENTRY, tlg_js_100_indexed_original,
-           TLG_JS_PROLOGUE_BYTES);
+    memcpy(fake + TLG_JS_100_INDEXED_ENTRY, tlg_js_100_indexed_fingerprint,
+           TLG_JS_FINGERPRINT_BYTES);
     assert(tlg_js_100_signature_match(fake, n));
     assert(!tlg_js_100_signature_match(fake, n - 129));
     fake[TLG_JS_100_INDEXED_ENTRY + 5] ^= 0x01;
