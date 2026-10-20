@@ -468,6 +468,7 @@ target_compile_options(cheat-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 # The test enables the opt-in flag from the environment.
 add_executable(native-draw-bridge-test EXCLUDE_FROM_ALL ../tests/test_native_draw_bridge.cpp)
 target_compile_features(native-draw-bridge-test PRIVATE cxx_std_23)
+target_compile_options(native-draw-bridge-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(native-draw-bridge-test PRIVATE shim)
 if(WIN32)
     target_link_libraries(native-draw-bridge-test PRIVATE synchronization)
