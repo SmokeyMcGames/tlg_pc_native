@@ -108,6 +108,54 @@ The Vulkan command encoder and register-capture ring were checked locally
 with GCC and Clang. The whole fork has **not** been rebuilt or gameplay-tested
 for this revision.
 
+## Vulkan-only offscreen rendering prototype
+
+This branch now includes **a real Vulkan-only offscreen rendering path**,
+independent of PS4 PM4 command decoding:
+
+- `port/gpu/shadps4/video_core/host_shaders/native_triangle.frag` contains
+  a synthetic fragment shader compiled to SPIR-V by the existing
+  `glslangValidator` host-shader build, paired with the port's `fs_tri.vert`.
+- `port/gpu/shim/tlg_native_triangle_smoke.cpp` creates a native Vulkan
+  graphics pipeline using dynamic rendering, recording a three-vertex
+  full-screen triangle into an isolated 64×64 color image.
+- `DeviceResources` creates the 2D image and image view with VMA,
+  transitions it to `VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL`, and
+  the existing Vulkan GPU command scheduler records `vkCmdBeginRendering`,
+  `vkCmdBindPipeline`, `vkCmdDraw`, and `vkCmdEndRendering`.
+- **`TLG_NATIVE_VULKAN_TRIANGLE=1`** enables this smoke in an existing
+  GPU-enabled run. It executes independently from the game's translated
+  draw commands and does not touch the presented swapchain image.
+  It attempts to record the pass once on the GPU submission thread and
+  logs native pipeline initialization and recording outcomes.
+- The smoke destructor submits any deferred recording and waits for GPU
+  execution before freeing its pipeline and image.
+- **No image readback or pixel comparison is implemented**, and the
+  current environment cannot run the full Vulkan code with a GPU device.
+  Successful initialization or scheduling is not proof of an actual
+  correct rendered image. Full Windows/Linux build and runtime test
+  remain unverified on this development branch.
+
+This validates a narrow **native Vulkan rendering capability**, not a
+native renderer for *The Last Guardian*: game shaders, scene resources,
+textures, alpha/depth, command ordering, and guest synchronization still
+come from the existing translator.
+
+## Offline shader identification
+
+`port/scripts/native_shader_inventory.py` recognizes the original
+v01.00/v01.03 executable SHA-256, scans executable ELF segments for
+validated `OrbShdr` metadata and code boundaries, and writes an inventory
+of shader hashes and types. Optional raw GCN code extraction requires the
+user's own `eboot.bin` and keeps copyrighted bytes in a local folder.
+The supplied v01.00 executable contains **49 embedded auxiliary shader
+binaries** (1 vertex, 1 pixel, 47 compute). Those do **not** represent
+all of the actual game's material shaders in PSARC assets.
+
+The inventory does not yet compile GCN to SPIR-V; shader translation
+requires verified resource descriptions and per-stage specialization
+to preserve original behavior.
+
 ## Critical work that remains before removing the old GPU interpreter
 
 1. Identify and signature-check all **game-level** resource creation,
