@@ -12,8 +12,10 @@
 #include <span>
 
 namespace Vulkan { class Instance; class Scheduler; }
+namespace Shader { struct RuntimeInfo; struct Profile; }
 
 namespace TlgNativeVk {
+struct GcnShaderInput;
 class DeviceResources {
 public:
     DeviceResources(const Vulkan::Instance& instance, ResourceRegistry& registry);
@@ -31,6 +33,16 @@ public:
                                 std::span<const std::uint32_t> vertex_spirv,
                                 std::span<const std::uint32_t> fragment_spirv,
                                 std::uint32_t color_format);
+    // Native game shader path: consume *verified high-level Js* GCN shader
+    // inputs directly, without reading Gnm/PM4 register packets. Fails closed
+    // unless the shader/resource specialization is complete and both stages
+    // translate to resource-free SPIR-V suitable for the current pipeline.
+    bool CreateResourceFreeGraphicsPipelineFromGCN(
+        std::uint64_t guest_id, const GcnShaderInput& vertex,
+        const Shader::RuntimeInfo& vertex_runtime,
+        const GcnShaderInput& fragment,
+        const Shader::RuntimeInfo& fragment_runtime,
+        const Shader::Profile& profile, std::uint32_t color_format);
     void RetireGraphicsPipeline(std::uint64_t guest_id);
     // GPU-owner-thread-only lookup. A caller must not keep the returned handle
     // beyond replacement, retirement or a GPU submission lifetime.
