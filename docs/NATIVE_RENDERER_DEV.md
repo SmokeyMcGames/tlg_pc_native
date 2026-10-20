@@ -262,6 +262,49 @@ with GCC and Clang. The full Vulkan-device and Windows-game versions of
 this path have **not** been built or run on a real GPU here. It is a
 standalone native rendering proof, not the game's material system.
 
+## Exact PS4 RGBA8 detiling (CPU validation + native Vulkan upload)
+
+The native texture owner now supports **four explicitly identified tiled
+RGBA8 layouts** in addition to linear uploads:
+
+- `Display1DThin` (tile mode 9) and `Thin1DThin` (tile mode 13):
+  8×8 32bpp microtiles, using the precise display/thin bit permutations
+  from the port's reference `tiling.comp`. The API requires verified
+  8-pixel-aligned tiled pitch and allocated height, and validates source
+  memory and 256 MiB upload limits.
+- `Display2DThin` (tile mode 10) and `Thin2DThin` (tile mode 14):
+  **single-sample, single-slice, non-alt, 32-bit RGBA8**,
+  `PIPE_CONFIG=P8_32x32_16x16`, 16 banks, 8 pipes, bank width/height 1,
+  macro aspect 2. These produce **128×64 macro tiles (32 KiB)** with
+  GCN bank/pipe interleaving. The caller supplies the verified 4-bit
+  `bank_swizzle` value and pitch/allocated height aligned to 128×64.
+- All four paths convert to a private tightly packed linear buffer,
+  then reuse `CreateSampledTextureRGBA8` to allocate a Vulkan image
+  and record its staging upload. The source game pointer is not kept
+  after the call, and existing textures are not overwritten in flight.
+- `test_native_rgba8_detile.cpp` and
+  `test_native_rgba8_macro_detile.cpp` are standalone CPU reference
+  regressions. The macro test checks **every physical pixel address** in
+  each padded tile is unique, in range, and roundtrips for multiple
+  dimensions, tile variants and bank swizzles. GCC and Clang C++23
+  optimized builds of the detached algorithms passed locally.
+
+Two **opt-in GPU** tests exercise the conversion through actual Vulkan
+image creation, sampler binding, draw, and pixel readback:
+
+- `TLG_NATIVE_VULKAN_TILED_TEXTURE=1`: 1D-thin 8×8 RGBA8 with a varying
+  color gradient.
+- `TLG_NATIVE_VULKAN_MACRO_TEXTURE=1`: 2D-thin 128×64 RGBA8,
+  bank-swizzle **7**, and a different gradient. This takes precedence
+  over other triangle smoke flags when multiple are enabled.
+
+**These GPU tests are committed but unverified on a real Vulkan device.**
+This is not a complete PS4 image-format implementation. Full native
+gameplay still needs texture descriptor interception, 2D macro variants
+with different pipe/bank settings, BGRA/channel swizzles, BCn compression,
+mipmaps, cube/array slices, render-target metadata, aliasing and
+CPU/GPU memory ownership. Never treat unsupported layouts as linear.
+
 ## Native GCN shader translation and reuse
 
 - `tlg_native_gcn_compiler.{h,cpp}` is a PM4-independent entry point into
