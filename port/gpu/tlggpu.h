@@ -28,6 +28,12 @@ void tlggpu_dump_guest_writes(void *ucontext);
  * no window exists; poll returns 0 typing, 1 confirmed, 2 cancelled (UTF-8 text). */
 int tlggpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int tlggpu_text_input_poll(char *out_utf8, uint64_t size);
+/* Bounded v01.00 JsDeviceContext command telemetry, not a native renderer.
+ * The GPU thread drains a read-only shadow stream. Null disables it. */
+struct TlgJsNativeRing;
+void tlggpu_native_js_attach(const struct TlgJsNativeRing *ring);
+void tlggpu_native_js_drain(void);
+
 /* The save dialogs (sceSaveDataDialog), drawn over the game. kind: 1 save, 2 load, 3 delete
  * (the dialog's dispType); 0 for the toast of a save the game made without a dialog. */
 typedef struct TlgSaveEntry {

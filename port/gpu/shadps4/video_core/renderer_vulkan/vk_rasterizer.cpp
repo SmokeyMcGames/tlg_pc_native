@@ -1456,8 +1456,13 @@ void Rasterizer::Finish() {
     scheduler.Finish();
 }
 
+extern "C" void tlggpu_native_js_drain(void);
+
 void Rasterizer::OnSubmit() {
     DrainDrawPipe();
+    // Read-only, opt-in Js* command stream: the Vulkan thread receives typed
+    // high-level draw records independently of the PM4 decoder.
+    tlggpu_native_js_drain();
     if (fault_process_pending) {
         fault_process_pending = false;
         buffer_cache.ProcessFaultBuffer();

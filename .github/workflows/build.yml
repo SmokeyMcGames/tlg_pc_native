@@ -66,6 +66,8 @@ jobs:
           TLG_NATIVE_DRAW_BRIDGE=1 ./out/gpu/native-draw-bridge-test
           ninja -C out/gpu native-js-bridge-test
           ./out/gpu/native-js-bridge-test
+          ninja -C out/gpu native-js-command-stream-test
+          ./out/gpu/native-js-command-stream-test
       - name: Package
         run: bash packaging/linux/package.sh
       - uses: actions/upload-artifact@v4
@@ -117,6 +119,8 @@ jobs:
           TLG_NATIVE_DRAW_BRIDGE=1 ./out/gpu/native-draw-bridge-test.exe
           ninja -C out/gpu native-js-bridge-test
           ./out/gpu/native-js-bridge-test.exe
+          ninja -C out/gpu native-js-command-stream-test
+          ./out/gpu/native-js-command-stream-test.exe
       - name: Package
         env:
           MSYS2_ROOT: ${{ runner.temp }}/msys64

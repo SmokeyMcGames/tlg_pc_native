@@ -4,6 +4,7 @@
 #include "tlg_png.h"
 #include "tlg_settings.h"
 #include "tlg_copy.h"
+#include "../../src/native_js_commands.h"
 #ifndef _WIN32
 #include <sys/resource.h>
 #endif
@@ -456,4 +457,39 @@ extern "C" int tlggpu_text_input_poll(char* out, uint64_t size) {
         out[n] = 0;
     }
     return state;
+}
+
+/* Native high-level Js* shadow stream. This does NOT execute guest draws:
+ * the old Vulkan rasterizer still owns resources, barriers and actual output.
+ * It proves that the Vulkan command thread receives version-checked draw
+ * calls without interpreting PM4 in the source-side capture path. */
+namespace {
+std::atomic<const TlgJsNativeRing*> g_native_js_ring{nullptr};
+}
+extern "C" void tlggpu_native_js_attach(const TlgJsNativeRing *ring) {
+    g_native_js_ring.store(ring, std::memory_order_release);
+}
+extern "C" void tlggpu_native_js_drain(void) {
+    const TlgJsNativeRing *ring = g_native_js_ring.load(std::memory_order_acquire);
+    if (!ring) return;
+    // Called only from the GPU command processor's serialized OnSubmit path.
+    static uint64_t next{}, missed{}, indexed{}, instanced{};
+    static auto last = std::chrono::steady_clock::now();
+    TlgJsNativeCommand cmd{};
+    unsigned read = 0;
+    while (read < TLG_JS_COMMAND_CAPACITY &&
+           tlg_js_native_pop(ring, &next, &cmd, &missed)) {
+        ++read;
+        if (cmd.kind == TLG_JS_CMD_INDEXED_COMMON) ++indexed;
+        else if (cmd.kind == TLG_JS_CMD_INDEXED_INSTANCED) ++instanced;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now - last >= std::chrono::seconds(5)) {
+        std::printf("Native Js->Vulkan shadow: indexed=%llu instanced=%llu "
+                    "dropped=%llu (total, legacy renderer still active)\n",
+                    static_cast<unsigned long long>(indexed),
+                    static_cast<unsigned long long>(instanced),
+                    static_cast<unsigned long long>(missed));
+        last = now;
+    }
 }

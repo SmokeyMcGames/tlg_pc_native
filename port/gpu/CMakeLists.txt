@@ -478,3 +478,8 @@ endif()
 add_executable(native-js-bridge-test EXCLUDE_FROM_ALL ../tests/test_native_js_bridge.c)
 target_compile_features(native-js-bridge-test PRIVATE c_std_11)
 target_compile_options(native-js-bridge-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Standalone bounded command stream test: no game content, no Vulkan instance.
+add_executable(native-js-command-stream-test EXCLUDE_FROM_ALL ../tests/test_native_js_commands.c)
+target_compile_features(native-js-command-stream-test PRIVATE c_std_11)
+target_compile_options(native-js-command-stream-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
