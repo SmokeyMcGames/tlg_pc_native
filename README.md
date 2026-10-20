@@ -9,6 +9,17 @@
 
 # The Last Guardian — native PC port
 
+> **SmokeyMcGames experimental fork (native Vulkan work-in-progress):**
+> The separate `experimental/native-vulkan-phase1` branch supports verified
+> **eboot v1.00 and v1.03 frame-rate patches** in the ordinary launcher,
+> enables a recommended GPU freeze workaround by default, and includes opt-in
+> typed Vulkan operation experiments. **It does NOT yet replace the full
+> renderer**, and v1.00 complete gameplay compatibility remains unverified.
+> See [native renderer progress](docs/NATIVE_VULKAN_EXPERIMENT.md) and
+> [FPS notes](docs/60fps.md). The original upstream game-file instructions
+> below apply to the tested v1.03 release only.
+
+
 **The Last Guardian** (PS4, CUSA03627 US / CUSA03745 EU, update 01.03) running on PC with graphics, audio, controller, mouse and keyboard and saves, at a steady 30 FPS (optional, experimental 60 FPS and unlocked modes) and without a CPU emulator. The game's original code runs natively on the processor. The PS4 system is reimplemented, and the GPU is translated to Vulkan.
 
 > **No game files come with this project.** To play, you need your own copy, dumped from your own PS4.

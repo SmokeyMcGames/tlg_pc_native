@@ -3,9 +3,10 @@
 """The Last Guardian frame rate patches (TLG_FPS=30|60|unlocked) and community mods/cheats,
 written together to out/patches.bin.
 
-Each built-in frame rate patch is a list of {image offset, expected bytes, new bytes} for eboot
-1.03 only (sha256 below, or a SELF dump of it): the expected bytes are checked in eboot.bin
-before anything is written, so another build never gets byte writes in the wrong place. The
+Each built-in frame rate patch is a list of {image offset, expected bytes, new bytes}.
+The known eboot 01.00 and 01.03 builds have different patch locations. The generator
+recognizes verified executables and validates the original bytes before any write.
+Unknown builds are NEVER blindly patched. The
 loader (probe.c apply_patches) applies the file after relocation. Image offsets are eboot
 virtual addresses; the Ghidra addresses in the comments (base 0x1000000) are offset + 0x1000000.
 Research: docs/60fps.md.
@@ -28,6 +29,9 @@ import mod_patches
 
 TITLE_IDS = {'CUSA03627', 'CUSA03745'}   # US, EU (tlg_run.py LANGUAGES_BY_TITLE)
 EBOOT_103_SHA256 = '91dce685be81f8f6bc88097d4fc7a62e97ca08d109621c57fe9371ae125feb3c'
+# Verified from the original v01.00 PS4 SELF dump. Never include the game file in this repo.
+EBOOT_100_SELF_SHA256 = 'a25497ce99c4884dac673872a727330097b97487943affb70d4b1b432969f473'
+EBOOT_100_ELF_SHA256 = '283796e8cc3837523bd8bb3a79e5c588ba818e7db25aad0e02d03a804ea0ca61'
 SELF_MAGIC = b'O\x15=\x1d'
 TEXT_FILE_OFFSET = 0x4000      # PT_LOAD 0 (R E): file offset of vaddr 0
 TEXT_SIZE = 0x16b2d5c
@@ -43,8 +47,8 @@ def rip_disp(instruction_end, target):
     return struct.pack('<i', target - instruction_end)
 
 
-# Patches by name: [(ghidra address, expected bytes, new bytes, what it does)].
-PATCHES = {
+# 01.03 patches by name: [(ghidra address, expected, replacement, explanation)].
+PATCHES_103 = {
     # JsDevice/JsSwapChain init (0x1c4f9f0): sceVideoOutSetFlipRate(handle, 1) -> 0.
     # Rate 1 shows a frame every second vblank (30 Hz on the 60 Hz vblank); 0 every vblank.
     'flip_rate_60': [
@@ -75,6 +79,30 @@ PATCHES = {
     ],
 }
 
+# 01.00 locations verified against the supplied original 01.00 executable.
+# The original flip-rate call site is distinct from 01.03, as is the frame-time triple.
+PATCHES_100 = {
+    'flip_rate_60': [
+        (0x1b8be7c, bytes.fromhex('be01000000'), bytes.fromhex('be00000000'),
+         '01.00 sceVideoOutSetFlipRate: mov esi,1 -> mov esi,0'),
+    ],
+    'dt_snap_60': [
+        (0x24d9920, f32(0.035), f32(0.0175), '01.00 dt snap upper bound 0.035 -> 0.0175'),
+        (0x24d9924, f32(1 / 30), f32(1 / 60), '01.00 dt snap target 1/30 -> 1/60'),
+        (0x24d9928, f32(0.0316666663), f32(0.0158333331),
+         '01.00 dt snap lower bound 0.031667 -> 0.015833'),
+    ],
+}
+
+BUILD_PROFILES = {
+    '01.00': {'text_size': 0x168a5ec, 'patches': PATCHES_100,
+              'source_hashes': {EBOOT_100_SELF_SHA256, EBOOT_100_ELF_SHA256}},
+    '01.03': {'text_size': 0x16b2d5c, 'patches': PATCHES_103,
+              'source_hashes': {EBOOT_103_SHA256}},
+}
+PATCHES = PATCHES_103  # backward-compatible alias for 01.03 test fixtures
+SUPPORTED_PATCH_NAMES = set(PATCHES_100) | set(PATCHES_103)
+
 MODES = {
     '30': [],
     # max_fps_double/max_fps_off are left out: 60 and unlocked were reached without them
@@ -93,19 +121,60 @@ def normalize_mode(value):
     return {'unlimited': 'unlocked', 'uncapped': 'unlocked', 'free': 'unlocked', '0': 'unlocked'}.get(value, value)
 
 
-def mode_writes(eboot, names):
-    """[(image offset, new bytes, description)] after checking every expected byte in eboot."""
+def mode_writes(eboot, names, profile=None):
+    """Create verified image-relative writes for the selected game build.
+
+    The optional profile keeps older 01.03 tests and external scripts compatible.
+    """
+    profile = profile or BUILD_PROFILES['01.03']
     writes = []
     for name in names:
-        for address, expected, new, what in PATCHES[name]:
+        if name not in profile['patches']:
+            raise ValueError(f'{name} is not available for this eboot version')
+        for address, expected, new, what in profile['patches'][name]:
             offset = address - GHIDRA_BASE
-            if not (0 <= offset and offset + len(expected) <= TEXT_SIZE) or len(expected) != len(new):
+            if (not 0 <= offset or offset + len(expected) > profile['text_size']
+                    or len(expected) != len(new)):
                 raise ValueError(f'{name}: bad patch entry at {address:#x}')
             found = eboot[TEXT_FILE_OFFSET + offset:TEXT_FILE_OFFSET + offset + len(expected)]
             if found != expected:
                 raise ValueError(f'{name}: {address:#x} has {found.hex()}, expected {expected.hex()}')
             writes.append((offset, new, f'{name}: {address:#x} {what}'))
     return writes
+
+
+def identify_build(original, digest, lines):
+    """Identify a trusted build, accepting alternate decrypted SELF wrappers only when
+    both independent FPS signature regions uniquely match one build.
+    """
+    version = next((name for name, profile in BUILD_PROFILES.items()
+                    if digest in profile['source_hashes']), None)
+    elf = original
+    if original[:4] == SELF_MAGIC:
+        try:
+            from prepare import parse_self
+            elf = bytes(parse_self(original)[0])
+        except (ValueError, IndexError, KeyError) as error:
+            lines.append(f'Frame rate: cannot read the SELF eboot.bin ({error})')
+            return None, None
+        elf_digest = hashlib.sha256(elf).hexdigest()
+        if elf_digest == EBOOT_100_ELF_SHA256:
+            version = '01.00'
+        elif version is None:
+            candidates = []
+            for name, profile in BUILD_PROFILES.items():
+                try:
+                    mode_writes(elf, ['flip_rate_60', 'dt_snap_60'], profile)
+                    candidates.append(name)
+                except ValueError:
+                    pass
+            if len(candidates) == 1:
+                version = candidates[0]
+                lines.append(f'Frame rate: validated alternate SELF version {version}')
+    if version and elf[:4] != b'\x7fELF':
+        lines.append('Frame rate: executable is not a decrypted ELF')
+        return None, None
+    return version, elf
 
 
 def write_patch_file(path, writes):
@@ -162,36 +231,29 @@ def prepare(game_dir, out_dir, mode, mods_dir=None, mods_config=None):
         mode = '30'
     fps_writes = []
     eboot = None
-    # TLG_FPS_PATCHES="a,b" (measurements): these patches instead of the mode's own.
-    names = [n for n in os.environ.get('TLG_FPS_PATCHES', '').split(',') if n in PATCHES] or MODES[mode]
+    # Optional developer override; never apply 01.03-only names to the 01.00 build.
+    requested = [n.strip() for n in os.environ.get('TLG_FPS_PATCHES', '').split(',')
+                 if n.strip() in SUPPORTED_PATCH_NAMES]
+    names = requested or MODES[mode]
     if names:
         try:
-            eboot = (Path(game_dir) / 'eboot.bin').read_bytes()
+            original = (Path(game_dir) / 'eboot.bin').read_bytes()
         except OSError as error:
-            eboot = b''
+            original = b''
             lines.append(f'Frame rate: cannot read eboot.bin ({error})')
-        digest = hashlib.sha256(eboot).hexdigest()
-        usable = digest == EBOOT_103_SHA256
-        if not usable and eboot[:4] == SELF_MAGIC:
-            # A SELF dump of 1.03 (sha256 b7f61057…, #40) wraps the same ELF as the plain
-            # dump the hash is for, at other file offsets: patch the ELF inside (the image
-            # prepare.py hands the loader). mode_writes checks every expected byte, so a SELF
-            # of another build still falls back to 30.
-            try:
-                from prepare import parse_self
-                eboot = bytes(parse_self(eboot)[0])
-                usable = True
-                lines.append(f'Frame rate: eboot.bin is a SELF ({digest[:16]}…), checking the ELF inside')
-            except ValueError as error:
-                lines.append(f'Frame rate: cannot read the SELF eboot.bin ({error})')
-        if not usable:
-            lines.append(f'Frame rate: eboot.bin is not v1.03 ({digest[:16]}…): {mode} FPS patches not applied, 30 FPS')
+        digest = hashlib.sha256(original).hexdigest()
+        version, eboot = identify_build(original, digest, lines)
+        if not version:
+            lines.append(f'Frame rate: unknown executable ({digest[:16]}...); '
+                         f'{mode} FPS patches not applied, using 30')
             mode = '30'
         else:
             try:
-                fps_writes = mode_writes(eboot, names)
+                fps_writes = mode_writes(eboot, names, BUILD_PROFILES[version])
+                lines.append(f'Frame rate: eboot version {version} recognized; '
+                             f'{len(fps_writes)} validated frame-rate writes')
             except ValueError as error:
-                lines.append(f'Frame rate: {error}: patches not applied, 30 FPS')
+                lines.append(f'Frame rate: {version} {error}: patches not applied, using 30')
                 mode, fps_writes = '30', []
     for _, data, what in fps_writes:
         lines.append(f'Frame rate patch {what} ({data.hex()})')

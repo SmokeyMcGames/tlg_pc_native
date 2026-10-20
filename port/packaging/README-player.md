@@ -1,5 +1,19 @@
 # The Last Guardian — port para PC / PC port
 
+> **SmokeyMcGames experimental branch note:** Verified `eboot.bin` v01.00 and
+> v01.03 frame-rate patch variants are integrated into the normal launcher.
+> The video panel identifies a recognized executable and offers 30/60/Unlocked
+> modes. `Stable GPU mode` defaults on (2 draw-prep workers, asynchronous
+> shader compilation off). Optional experimental Vulkan draw/compute operations
+> can be enabled for A/B tests.
+>
+> The full v01.00 game runtime remains experimental. For v01.00 keep **only
+> matching v01.00 game assets and sce_module libraries** in its own folder;
+> do not copy the v01.03 update on top. The detailed file list below describes
+> the upstream v01.03 installation, not a validated full v01.00 installation.
+> No game data or proprietary executables are shipped with this port.
+
+
 Por HayatoG · YouTube: [@hayatog-dev](https://www.youtube.com/@hayatog-dev) · Discord: [discord.gg/UMkdMYZh9g](https://discord.gg/UMkdMYZh9g) · Código: [github.com/HayatoG/tlg_pc](https://github.com/HayatoG/tlg_pc)
 
 **Nenhum arquivo do jogo vem neste pacote.** Você precisa da sua própria cópia de The Last Guardian para PS4. / **No game files are included.** You need your own copy of The Last Guardian for PS4.

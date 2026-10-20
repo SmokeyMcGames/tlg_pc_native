@@ -1581,8 +1581,25 @@ void Rasterizer::JoinBindHelper(void* context) {
 }
 
 bool Rasterizer::BindResources(const Pipeline* pipeline) {
-    if (IsComputeImageCopy(pipeline) || IsComputeMetaClear(pipeline) ||
-        IsComputeImageClear(pipeline)) {
+    // Experimental preclassified Vulkan-native compute commands. The legacy
+    // flow remains the default. Candidate bits are immutable pipeline metadata,
+    // and the existing per-dispatch correctness checks still execute on hits.
+    static const bool native_recipes = [] {
+        const char* env = std::getenv("TLG_NATIVE_COMPUTE_RECIPES");
+        return env && env[0] == '1' && env[1] == '\0';
+    }();
+    if (native_recipes) {
+        if (pipeline->IsCompute()) {
+            const u8 candidates =
+                static_cast<const ComputePipeline*>(pipeline)->NativeCandidates();
+            if (((candidates & ComputePipeline::ImageCopy) && IsComputeImageCopy(pipeline)) ||
+                ((candidates & ComputePipeline::MetaClear) && IsComputeMetaClear(pipeline)) ||
+                ((candidates & ComputePipeline::ImageClear) && IsComputeImageClear(pipeline))) {
+                return false;
+            }
+        }
+    } else if (IsComputeImageCopy(pipeline) || IsComputeMetaClear(pipeline) ||
+               IsComputeImageClear(pipeline)) {
         return false;
     }
 

@@ -463,3 +463,18 @@ target_link_libraries(fsr4-bench PRIVATE ffx-vulkan::fsr4-v07-vulkan ffx-vulkan:
 
 add_executable(cheat-hook-test ../tests/test_cheat_hook.cpp)
 target_compile_options(cheat-hook-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Experimental Gnm->Vulkan high-level draw hint, standalone and dependency-free.
+# The test enables the opt-in flag from the environment.
+add_executable(native-draw-bridge-test EXCLUDE_FROM_ALL ../tests/test_native_draw_bridge.cpp)
+target_compile_features(native-draw-bridge-test PRIVATE cxx_std_23)
+target_compile_options(native-draw-bridge-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(native-draw-bridge-test PRIVATE shim)
+if(WIN32)
+    target_link_libraries(native-draw-bridge-test PRIVATE synchronization)
+endif()
+
+# Phase-one native JsDeviceContext entry bridge regression.
+add_executable(native-js-bridge-test EXCLUDE_FROM_ALL ../tests/test_native_js_bridge.c)
+target_compile_features(native-js-bridge-test PRIVATE c_std_11)
+target_compile_options(native-js-bridge-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)

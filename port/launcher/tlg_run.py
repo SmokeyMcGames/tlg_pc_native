@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Prepare and run The Last Guardian (CUSA03627 v1.03) through the native loader.
+"""Prepare and run The Last Guardian (supported eboot v1.00/v1.03) through the native loader.
 
 Shared by the command line (run_tlg.sh -> `tlg_run.py [seconds]`) and the launcher window
 (tlg_launcher.py), so both start the game the same way:
@@ -13,6 +13,8 @@ Shared by the command line (run_tlg.sh -> `tlg_run.py [seconds]`) and the launch
   3. tlg-probe runs with its output in out/logs/run-<date>.log (last_run.log points to it).
 """
 import datetime
+import functools
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -26,6 +28,7 @@ FROZEN = bool(getattr(sys, 'frozen', False))
 PORT_DIR = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PORT_DIR / 'scripts'))
 import mod_patches  # noqa: E402
+import tlg_patches  # noqa: E402
 REPO_DIR = PORT_DIR.parent
 OUT_DIR = PORT_DIR / 'out'
 USER_DIR = PORT_DIR / 'user'
@@ -85,9 +88,38 @@ DEFAULT_SETTINGS = {
     'mouse_sensitivity': 1.0,
     'mouse_invert_y': False,
     'key_map': {},                 # PS4 button -> 'Key|Mouse Left' (empty: the default)
-    'frame_rate': '30',            # 30 | 60 | unlocked (scripts/tlg_patches.py; TLG_FPS wins)
+    'frame_rate': '30',            # v1.00/v1.03, identified by executable and verified bytes
+    'gpu_stability': True,         # recommended 2 workers, synchronous shader compile (#37)
+    'native_draw_bridge': False,   # experimental Gnm -> Vulkan typed draw bridge (off by default)
+    'native_js_trace': False,      # read-only verified JsDeviceContext entry intercept (v1.00)
 }
 FRAME_RATES = ['30', '60', 'unlocked']
+
+
+@functools.lru_cache(maxsize=8)
+def _recognized_eboot_digest(file, size, mtime_ns):
+    """UI-only version hint; no game bytes persist in the repository or launcher settings."""
+    del size, mtime_ns
+    try:
+        with open(file, 'rb') as handle:
+            digest = hashlib.file_digest(handle, 'sha256').hexdigest()
+    except OSError:
+        return None
+    if digest in (tlg_patches.EBOOT_100_SELF_SHA256, tlg_patches.EBOOT_100_ELF_SHA256):
+        return '01.00'
+    if digest == tlg_patches.EBOOT_103_SHA256:
+        return '01.03'
+    return None
+
+
+def fps_patch_version(game_dir):
+    """Return verified eboot version or None. Unknown SELF may be validated when Play is pressed."""
+    path = Path(game_dir) / 'eboot.bin'
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    return _recognized_eboot_digest(str(path.resolve()), stat.st_size, stat.st_mtime_ns)
 # The frame rate mode prepare() really applied (another eboot build stays at 30).
 applied_frame_rate = '30'
 
@@ -442,6 +474,16 @@ def build_env(settings, extra=None):
     # Without the console module the port's own mixer (runtime_ngs2.c) plays the audio.
     env['TLG_NGS2'] = 'native' if ngs2_module(settings) else 'hle'
     env['TLG_CONFIG'] = str(USER_DIR / 'tlg.ini')
+    # Workaround for the GPU page-fault/EOP deadlock (#37), explicitly enabled by
+    # default in the fork. Allow callers and the safer zero-worker launcher to override.
+    if settings.get('gpu_stability', True):
+        env.setdefault('TLG_PREP_WORKERS', '2')
+        env.setdefault('TLG_ASYNC_SHADERS', '0')
+    if settings.get('native_js_trace', False):
+        env.setdefault('TLG_JS_NATIVE_TRACE', '1')
+    if settings.get('native_draw_bridge', False):
+        env.setdefault('TLG_NATIVE_DRAW_BRIDGE', '1')
+        env.setdefault('TLG_NATIVE_COMPUTE_RECIPES', '1')
     # Window name and app id (matches tlg-pc.desktop for Alt+Tab and the dock) and icon.
     env.setdefault('TLG_APP_NAME', 'The Last Guardian')
     env.setdefault('TLG_APP_ID', 'tlg-pc')

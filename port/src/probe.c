@@ -12,6 +12,7 @@
 #include "cheat_hook.h"
 #include "actor_hook.h"
 #include "damage_hook.h"
+#include "native_js_bridge.h"
 #include "gpu/tlggpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
@@ -47,7 +48,53 @@ static IsaTable *isa_table; /* rewritten sites (--isa-rewrite); the fault handle
 #ifndef _WIN32
 static uintptr_t guest_code_end; /* end of the image and its stub areas (emulation, red zone); TLG_CLOBBER_RED_ZONE */
 #endif
-static void isa_report_hook(void) { isa_rewrite_report(isa_table, stdout); }
+/* Both the ISA site report and the high-level renderer-hook report use the same
+ * exit diagnostics callback. Never replace one report with the other.
+ */
+extern volatile uint64_t tlg_js_trace_indexed_calls;
+extern volatile uint64_t tlg_js_trace_instanced_calls;
+extern volatile uintptr_t tlg_js_trace_last_context;
+extern volatile uintptr_t tlg_js_trace_last_arg1;
+extern volatile uintptr_t tlg_js_trace_last_arg2;
+extern volatile uintptr_t tlg_js_trace_last_arg3;
+extern volatile uintptr_t tlg_js_trace_instanced_last_arg1;
+extern volatile uintptr_t tlg_js_trace_instanced_last_arg2;
+extern volatile uintptr_t tlg_js_trace_instanced_last_arg3;
+static int tlg_js_trace_enabled;
+/* The existing freeze-monitor thread polls this without touching guest memory.
+ * Reports every 5s so the high-level interception can be verified in live gameplay.
+ */
+void tlg_js_trace_report_tick(uint64_t now_ms) {
+    if (!tlg_js_trace_enabled) return;
+    static uint64_t last_ms, last_count, last_instanced;
+    if (last_ms && now_ms - last_ms < 5000) return;
+    const uint64_t calls = __atomic_load_n(&tlg_js_trace_indexed_calls, __ATOMIC_RELAXED);
+    const uint64_t instanced = __atomic_load_n(&tlg_js_trace_instanced_calls, __ATOMIC_RELAXED);
+    if (last_ms)
+        printf("Js native bridge: DrawIndexedCommon +%llu, DrawIndexedInstanced +%llu / 5s; "
+               "totals %llu/%llu; indexed ctx=%p rsi=%p rdx=%p rcx=%p; instanced rsi=%p rdx=%p rcx=%p\n",
+               (unsigned long long)(calls - last_count),
+               (unsigned long long)(instanced - last_instanced),
+               (unsigned long long)calls, (unsigned long long)instanced,
+               (void *)__atomic_load_n(&tlg_js_trace_last_context, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_last_arg1, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_last_arg2, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_last_arg3, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_instanced_last_arg1, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_instanced_last_arg2, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_instanced_last_arg3, __ATOMIC_RELAXED));
+    last_ms = now_ms;
+    last_count = calls;
+    last_instanced = instanced;
+}
+static void isa_report_hook(void) {
+    if (isa_table) isa_rewrite_report(isa_table, stdout);
+    if (tlg_js_trace_enabled)
+        printf("Js native bridge: v01.00 calls indexed=%llu, indexed-instanced=%llu, last-context=%p\n",
+               (unsigned long long)__atomic_load_n(&tlg_js_trace_indexed_calls, __ATOMIC_RELAXED),
+               (unsigned long long)__atomic_load_n(&tlg_js_trace_instanced_calls, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_last_context, __ATOMIC_RELAXED));
+}
 int vulkan_smoke(void);
 
 static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
@@ -702,6 +749,110 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
     printf("Multipliers: damage %s, green/blue/gold orbs %s\n", damage ? "ready" : "unavailable",
            pickup ? "ready" : "unavailable");
 }
+/* Optional read-only interception of the game's high-level JsDeviceContext entry.
+ * This is a real guest-function hook, NOT a native renderer replacement.
+ * Every general, floating-point and flags register is preserved exactly.
+ * A 14-byte absolute jump replaces only a verified, relocation-free prologue.
+ */
+#if defined(__x86_64__)
+__attribute__((used)) uintptr_t tlg_js_indexed_gateway;
+__attribute__((used)) uintptr_t tlg_js_instanced_gateway;
+__attribute__((used)) volatile uint64_t tlg_js_trace_instanced_calls;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_context;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_arg1;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_arg2;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_arg3;
+__attribute__((used)) volatile uint64_t tlg_js_trace_indexed_calls;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_last_context;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg1;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg2;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg3;
+
+/* No C call, stack change, or XMM clobbers on the guest's hot draw path. */
+__attribute__((naked, used, noinline))
+static void tlg_js_indexed_entry(void) {
+    __asm__ volatile(
+        "pushfq\n\t"
+        "lock incq tlg_js_trace_indexed_calls(%rip)\n\t"
+        "movq %rdi, tlg_js_trace_last_context(%rip)\n\t"
+        "movq %rsi, tlg_js_trace_last_arg1(%rip)\n\t"
+        "movq %rdx, tlg_js_trace_last_arg2(%rip)\n\t"
+        "movq %rcx, tlg_js_trace_last_arg3(%rip)\n\t"
+        "popfq\n\t"
+        "jmp *tlg_js_indexed_gateway(%rip)\n\t"
+    );
+}
+/* DrawIndexedInstanced v01.00: capture the context, preserve every guest
+ * argument and SIMD register, then replay its own original prologue.
+ */
+__attribute__((naked, used, noinline))
+static void tlg_js_instanced_entry(void) {
+    __asm__ volatile(
+        "pushfq\n\t"
+        "lock incq tlg_js_trace_instanced_calls(%rip)\n\t"
+        "movq %rdi, tlg_js_trace_instanced_last_context(%rip)\n\t"
+        "movq %rsi, tlg_js_trace_instanced_last_arg1(%rip)\n\t"
+        "movq %rdx, tlg_js_trace_instanced_last_arg2(%rip)\n\t"
+        "movq %rcx, tlg_js_trace_instanced_last_arg3(%rip)\n\t"
+        "popfq\n\t"
+        "jmp *tlg_js_instanced_gateway(%rip)\n\t"
+    );
+}
+#endif
+
+static void install_js_native_trace(const char *app0, Segment *segments,
+                                     uint64_t count, uint64_t size) {
+    const char *enabled = getenv("TLG_JS_NATIVE_TRACE");
+    if (!enabled || strcmp(enabled, "1") != 0) return;
+    if (!app0) { puts("Js native bridge: no game folder, trace disabled"); return; }
+    char path[4096], serial[32] = "", version[32] = "";
+    snprintf(path, sizeof(path), "%s/sce_sys/param.sfo", app0);
+    sfo_value(path, "TITLE_ID", serial, sizeof(serial), NULL);
+    sfo_value(path, "APP_VER", version, sizeof(version), NULL);
+    if (strcmp(version, "01.00") ||
+        (strcmp(serial, "CUSA03627") && strcmp(serial, "CUSA03745"))) {
+        printf("Js native bridge: unsupported %s v%s; no guest patch applied\n",
+               serial, version);
+        return;
+    }
+    const uint64_t indexed = TLG_JS_100_INDEXED_ENTRY;
+    const uint64_t instanced = TLG_JS_100_INSTANCED_ENTRY;
+    /* Atomic feature-level policy: validate BOTH functions before patching EITHER.
+     * An unexpected game build leaves all guest code byte-for-byte intact. */
+    if (!mapped(segments, count, indexed, TLG_JS_FINGERPRINT_BYTES) ||
+        !mapped(segments, count, instanced, TLG_JS_FINGERPRINT_BYTES) ||
+        !tlg_js_100_signature_match(image, size) ||
+        !tlg_js_100_instanced_signature_match(image, size)) {
+        puts("Js native bridge: v01.00 indexed/instanced signature mismatch; no hooks installed");
+        return;
+    }
+    if (page_size < 256) {
+        puts("Js native bridge: unexpected page size, hooks disabled");
+        return;
+    }
+    unsigned char *trampolines = allocate(page_size);
+    if (!tlg_js_build_trampoline(trampolines, page_size, image + indexed,
+                                 TLG_JS_PROLOGUE_BYTES,
+                                 (uintptr_t)(image + indexed + TLG_JS_PROLOGUE_BYTES)) ||
+        !tlg_js_build_trampoline(trampolines + 128, page_size - 128, image + instanced,
+                                 TLG_JS_PROLOGUE_BYTES,
+                                 (uintptr_t)(image + instanced + TLG_JS_PROLOGUE_BYTES))) {
+        puts("Js native bridge: failed to construct verified trampolines; hooks disabled");
+        return;
+    }
+    protect(trampolines, page_size, 5);
+    tlg_js_indexed_gateway = (uintptr_t)trampolines;
+    tlg_js_instanced_gateway = (uintptr_t)(trampolines + 128);
+    __atomic_thread_fence(__ATOMIC_RELEASE);
+    tlg_js_write_absolute_jump(image + indexed, (uintptr_t)tlg_js_indexed_entry);
+    tlg_js_write_absolute_jump(image + instanced, (uintptr_t)tlg_js_instanced_entry);
+    tlg_js_trace_enabled = 1;
+    runtime_set_report_hook(isa_report_hook);
+    printf("Js native bridge: v01.00 DrawIndexedCommon at +0x%llx and "
+           "DrawIndexedInstanced at +0x%llx intercepted (read-only; originals run)\n",
+           (unsigned long long)indexed, (unsigned long long)instanced);
+}
+
 /* G3PATCH2 (patches.py): the patches' image base, then byte writes at image offsets, applied
  * after relocation. A write may replace a whole base-relative pointer slot (60/90 FPS++ swap
  * function pointers): the patch holds the address at the patches' base, rebased here. */
@@ -1154,6 +1305,7 @@ int main(int argc, char **argv) {
         runtime_set_report_hook(isa_report_hook);
         protect(stubs, stub_area + red_zone_area, 5);
     }
+    if (gpu_enabled) install_js_native_trace(app0, segments, ns, size);
     protect(traps, round_page((import_count + 1) * 32), 5);
     if (trace_stubs) protect(trace_stubs, round_page((import_count + 1) * TRACE_STUB_SIZE), 5);
     protect(image, round_page(size), 0);

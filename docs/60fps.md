@@ -1,5 +1,19 @@
 # 60 FPS / FPS livre (issue #5)
 
+> **Experimental fork addition — 20 October 2026:** The launcher now detects
+> two known `eboot.bin` versions and uses byte-verified, version-specific offsets.
+> **v01.00:** 60 FPS writes at Ghidra addresses `0x1B8BE7C` and
+> `0x24D9920`–`0x24D9928`; Unlocked changes only `0x1B8BE7C`.
+> Original v01.00 SELF SHA-256:
+> `a25497ce99c4884dac673872a727330097b97487943affb70d4b1b432969f473`.
+> **v01.03:** original upstream 60 FPS writes at `0x1C5151A`,
+> `0x24F17F8`–`0x24F1800`; Unlocked changes only `0x1C5151A`.
+> Both modes use the existing menu and require no external scripts.
+> The unknown-version fallback is **30 FPS with no FPS byte patches**.
+> These are patch-generation tests; complete v01.00 gameplay has not been
+> established. The historical research below primarily covers v01.03.
+
+
 Estado em 13/10/2026: **experimental, desligado por padrão.** O modo 30 FPS é o jogo como no PS4,
 sem nenhum patch.
 

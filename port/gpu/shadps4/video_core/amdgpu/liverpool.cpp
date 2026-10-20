@@ -9,6 +9,7 @@
 #include <time.h>
 #include "tlg_copy.h"
 #include "tlg_toggles.h"
+#include "tlg_native_draw_bridge.h"
 #include <cstdio>
 #include <boost/preprocessor/stringize.hpp>
 
@@ -721,6 +722,7 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
         ScanDcb(dcb, dcb_depth);
     }
 
+    TlgNativeDraw::Get().ReportIfDue();
     cblock.Reset();
 
     // TODO: potentially, ASCs also can depend on CE and in this case the
@@ -944,9 +946,16 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 }
                 const auto cmd_address = reinterpret_cast<const void*>(header);
                 const auto* prepared = draw_prep ? draw_prep->NextDraw() : nullptr;
-                rasterizer->ScopeMarker(
-                    "gfx:{}:DrawIndexOffset2", fmt::make_format_args(cmd_address),
-                    [&] { rasterizer->Draw(true, draw_index_off->index_offset, prepared); });
+                if (count + 1 == TlgNativeDraw::Bridge::IndexedWords &&
+                    TlgNativeDraw::Get().TryTake(reinterpret_cast<const u32*>(header),
+                                                 TlgNativeDraw::Bridge::Kind::DrawIndexed,
+                                                 TlgNativeDraw::Bridge::IndexedWords)) {
+                    rasterizer->Draw(true, draw_index_off->index_offset, prepared);
+                } else {
+                    rasterizer->ScopeMarker(
+                        "gfx:{}:DrawIndexOffset2", fmt::make_format_args(cmd_address),
+                        [&] { rasterizer->Draw(true, draw_index_off->index_offset, prepared); });
+                }
                 break;
             }
             case PM4ItOpcode::DrawIndexAuto: {
@@ -959,8 +968,15 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                 }
                 const auto cmd_address = reinterpret_cast<const void*>(header);
                 const auto* prepared = draw_prep ? draw_prep->NextDraw() : nullptr;
-                rasterizer->ScopeMarker("gfx:{}:DrawIndexAuto", fmt::make_format_args(cmd_address),
-                                        [&] { rasterizer->Draw(false, 0, prepared); });
+                // Validated high-level hint: invoke the Vulkan rasterizer directly.
+                // Unknown/modified commands continue through the original scoped path.
+                if (count + 1 == TlgNativeDraw::Bridge::PacketWords &&
+                    TlgNativeDraw::Get().TryTake(reinterpret_cast<const u32*>(header))) {
+                    rasterizer->Draw(false, 0, prepared);
+                } else {
+                    rasterizer->ScopeMarker("gfx:{}:DrawIndexAuto", fmt::make_format_args(cmd_address),
+                                            [&] { rasterizer->Draw(false, 0, prepared); });
+                }
                 break;
             }
             case PM4ItOpcode::DrawIndirect: {
@@ -1080,8 +1096,16 @@ Liverpool::Task Liverpool::ProcessGraphics(std::span<const u32> dcb, std::span<c
                     break;
                 }
                 const auto cmd_address = reinterpret_cast<const void*>(header);
-                rasterizer->ScopeMarker("gfx:{}:DispatchDirect", fmt::make_format_args(cmd_address),
-                                        [&] { rasterizer->DispatchDirect(); });
+                if (count + 1 == TlgNativeDraw::Bridge::DispatchWords &&
+                    TlgNativeDraw::Get().TryTake(reinterpret_cast<const u32*>(header),
+                                                 TlgNativeDraw::Bridge::Kind::DispatchDirect,
+                                                 TlgNativeDraw::Bridge::DispatchWords)) {
+                    rasterizer->DispatchDirect();
+                } else {
+                    rasterizer->ScopeMarker("gfx:{}:DispatchDirect",
+                                             fmt::make_format_args(cmd_address),
+                                             [&] { rasterizer->DispatchDirect(); });
+                }
                 break;
             }
             case PM4ItOpcode::DispatchIndirect: {
@@ -1539,9 +1563,16 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                 break;
             }
             const auto cmd_address = reinterpret_cast<const void*>(header);
-            rasterizer->ScopeMarker("asc[{}]:{}:DispatchDirect",
-                                    fmt::make_format_args(vqid, cmd_address),
-                                    [&] { rasterizer->DispatchDirect(); });
+            if (header->type3.NumWords() + 1 == TlgNativeDraw::Bridge::DispatchWords &&
+                TlgNativeDraw::Get().TryTake(reinterpret_cast<const u32*>(header),
+                                             TlgNativeDraw::Bridge::Kind::DispatchDirect,
+                                             TlgNativeDraw::Bridge::DispatchWords)) {
+                rasterizer->DispatchDirect();
+            } else {
+                rasterizer->ScopeMarker("asc[{}]:{}:DispatchDirect",
+                                        fmt::make_format_args(vqid, cmd_address),
+                                        [&] { rasterizer->DispatchDirect(); });
+            }
             break;
         }
         case PM4ItOpcode::DispatchIndirect: {

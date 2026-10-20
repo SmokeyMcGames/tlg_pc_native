@@ -40,8 +40,17 @@ TEXT = {
     'fps_30': ('30 FPS (as on PS4)', '30 FPS (como no PS4)'),
     'fps_60': ('60 FPS', '60 FPS'),
     'fps_unlocked': ('Unlocked (up to the display)', 'Livre (até a taxa do monitor)'),
-    'fps_hint': ('60/unlocked patch eboot 1.03 in memory; see docs/60fps.md',
-                 '60/livre alteram o eboot 1.03 na memória; ver docs/60fps.md'),
+    'fps_hint': ('Version-specific FPS patches for eboot 1.00/1.03; unknown builds stay at 30 FPS.',
+                 'Patches FPS específicos para eboot 1.00/1.03; versões desconhecidas ficam em 30 FPS.'),
+    'fps_found': ('Verified eboot: v{version}', 'eboot verificado: v{version}'),
+    'fps_unknown': ('eboot not recognized: FPS bytes will be checked when you press Play.',
+                    'eboot não reconhecido: bytes do patch serão conferidos ao iniciar.'),
+    'gpu_stability': ('Stable GPU mode (2 workers, sync shaders; recommended)',
+                      'Modo GPU estável (2 workers, shaders síncronos; recomendado)'),
+    'native_draw_bridge': ('Experimental Vulkan draw bridge (developer test)',
+                           'Bridge de desenho Vulkan experimental (teste de desenvolvedor)'),
+    'native_js_trace': ('Capture v1.00 JsDeviceContext calls (research; original rendering)',
+                        'Capturar chamadas JsDeviceContext v1.00 (pesquisa; renderização original)'),
     'show_fps': ('Show FPS overlay at start (F10 toggles)', 'Mostrar overlay de FPS ao iniciar (F10 alterna)'),
     'vram': ('Texture cache budget (MB of VRAM)', 'Orçamento do cache de texturas (MB de VRAM)'),
     'vram_hint': ('6 GB card: 5600 · 8 GB: 7000 · 12 GB: 10500 · 16 GB: 14000 · 24 GB: 21500. This is video card memory (VRAM), not RAM; never above your card\'s VRAM.',
@@ -241,7 +250,7 @@ class Launcher:
         titles = ttk.Frame(header)
         titles.pack(side='left', fill='y')
         ttk.Label(titles, text='The Last Guardian', font=('TkDefaultFont', 22, 'bold')).pack(anchor='w')
-        ttk.Label(titles, text='PC — CUSA03627 v1.03', foreground='#777').pack(anchor='w')
+        ttk.Label(titles, text='PC — eboot v1.00 / v1.03 (experimental)', foreground='#777').pack(anchor='w')
         credits = ttk.Frame(header)
         credits.pack(side='right', anchor='ne')
         ttk.Label(credits, text=self.t('port_by'), foreground='#777').pack(anchor='e')
@@ -306,6 +315,11 @@ class Launcher:
         self.combo(video, 5, 'frame_rate', tlg_run.FRAME_RATES, lambda k: self.t(f'fps_{k}'))
         ttk.Label(video, text=self.t('fps_hint'), foreground='#777', wraplength=320).grid(
             row=6, column=0, columnspan=2, sticky='w')
+        self.fps_version_label = ttk.Label(video, foreground='#666', wraplength=320)
+        self.fps_version_label.grid(row=7, column=0, columnspan=2, sticky='w')
+        self.check(video, 8, 'gpu_stability')
+        self.check(video, 9, 'native_draw_bridge')
+        self.check(video, 10, 'native_js_trace')
         ttk.Label(video, text=self.t('vram'), wraplength=220).grid(row=3, column=0, sticky='w', pady=(6, 0))
         vram = tk.IntVar(value=int(self.settings['vram_budget_mb']))
         self.vars['vram_budget_mb'] = vram
@@ -314,7 +328,7 @@ class Launcher:
         spin.grid(row=3, column=1, sticky='w', padx=6, pady=(6, 0))
         spin.bind('<FocusOut>', lambda _: self.changed())
         ttk.Label(video, text=self.t('vram_hint'), foreground='#777', wraplength=360).grid(row=4, column=0, columnspan=2, sticky='w')
-        self.build_filters(video, 7)
+        self.build_filters(video, 12)
 
         log_frame = ttk.LabelFrame(main, text='Log', padding=4)
         log_frame.grid(row=2, column=2, sticky='nsew', **pad)
@@ -613,6 +627,9 @@ class Launcher:
             text = self.t('ready')
         audio = self.t('audio_native') if tlg_run.ngs2_module(self.settings) else self.t('audio_builtin')
         self.status.configure(text=f'{text}  {audio}')
+        version = tlg_run.fps_patch_version(self.settings['game_dir'])
+        fps_message = self.t('fps_found', version=version) if version else self.t('fps_unknown')
+        self.fps_version_label.configure(text=fps_message)
         self.play_button.configure(state='disabled' if problems or self.process else 'normal')
         self.cache_button.configure(state='disabled' if self.process else 'normal')
 

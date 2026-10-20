@@ -387,6 +387,8 @@ static void *monitor(void *argument) {
         TlgGpuFrameCounters now;
         tlggpu_frame_counters(&now);
         const uint64_t ms = runtime_wait_now_ms();
+        extern void tlg_js_trace_report_tick(uint64_t now_ms);
+        tlg_js_trace_report_tick(ms);
         const uint64_t before = m->last_frames;
         switch (runtime_freeze_step(m, now.shown, ms)) {
         case 1: {

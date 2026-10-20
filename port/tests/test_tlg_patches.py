@@ -6,11 +6,12 @@ from pathlib import Path
 import tlg_patches as t
 
 
-def text_with(names, expected=True):
+def text_with(names, expected=True, profile=None):
     """A text segment with each patch's expected bytes (or other bytes) at its offset."""
-    text = bytearray(t.TEXT_SIZE)
+    profile = profile or t.BUILD_PROFILES['01.03']
+    text = bytearray(profile['text_size'])
     for name in names:
-        for address, original, _, _ in t.PATCHES[name]:
+        for address, original, _, _ in profile['patches'][name]:
             offset = address - t.GHIDRA_BASE
             text[offset:offset + len(original)] = original if expected else b'\xcc' * len(original)
     return text
@@ -64,7 +65,35 @@ class FrameRatePatchTests(unittest.TestCase):
         # Unchanged: a plain ELF is only patched when it is the checked 1.03 dump.
         applied, lines, _ = self.prepare(plain_elf(text_with(t.MODES['60'])), '60')
         self.assertEqual(applied, '30')
-        self.assertTrue(any('is not v1.03' in line for line in lines))
+        self.assertTrue(any('unknown executable' in line for line in lines))
+
+    def test_v100_self_60_and_unlocked_use_version_specific_writes(self):
+        # Synthetic SELF with byte-exact v1.00 signature locations (no proprietary game files).
+        profile = t.BUILD_PROFILES['01.00']
+        for mode, expected_count in [('60', 4), ('unlocked', 1)]:
+            with self.subTest(mode=mode):
+                applied, lines, blob = self.prepare(
+                    self_dump(text_with(t.MODES['60'], profile=profile)), mode)
+                self.assertEqual(applied, mode)
+                self.assertEqual(struct.unpack_from('<8sQQ', blob),
+                                 (b'G3PATCH2', 0, expected_count))
+                self.assertTrue(any('version 01.00 recognized' in line for line in lines))
+                pos = 24
+                expected = [entry[0] - t.GHIDRA_BASE
+                            for name in t.MODES[mode] for entry in profile['patches'][name]]
+                found = []
+                for _ in range(expected_count):
+                    offset, size = struct.unpack_from('<QQ', blob, pos)
+                    found.append(offset)
+                    pos += 16 + size
+                self.assertEqual(found, expected)
+
+    def test_v100_missing_signature_falls_back_to_30(self):
+        profile = t.BUILD_PROFILES['01.00']
+        applied, lines, blob = self.prepare(
+            self_dump(text_with(t.MODES['60'], expected=False, profile=profile)), '60')
+        self.assertEqual(applied, '30')
+        self.assertEqual(struct.unpack_from('<8sQQ', blob), (b'G3PATCH2', 0, 0))
 
     def test_30_writes_an_empty_patch_file(self):
         applied, lines, blob = self.prepare(b'', '30')
