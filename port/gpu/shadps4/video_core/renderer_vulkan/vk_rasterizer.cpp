@@ -8,6 +8,7 @@
 #include <xxhash.h>
 #include "video_core/renderer_vulkan/ui_composition.h"
 #include "tlg_toggles.h"
+#include "tlg_js_shadow.h"
 #include "video_core/renderer_vulkan/vk_frame_capture.h"
 #include "common/debug.h"
 #include "core/debug_state.h"
@@ -1457,6 +1458,9 @@ void Rasterizer::Finish() {
 }
 
 void Rasterizer::OnSubmit() {
+    // Drain high-level Js draw recipes from the guest as part of GPU submission.
+    // Shadow-only: this MUST NOT emit duplicate Vulkan draws while PM4 owns output.
+    TlgNativeJs::PumpOnGpuSubmission();
     DrainDrawPipe();
     if (fault_process_pending) {
         fault_process_pending = false;
