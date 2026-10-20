@@ -54,6 +54,20 @@ static uintptr_t guest_code_end; /* end of the image and its stub areas (emulati
 extern volatile uint64_t tlg_js_trace_indexed_calls;
 extern volatile uintptr_t tlg_js_trace_last_context;
 static int tlg_js_trace_enabled;
+/* The existing freeze-monitor thread polls this without touching guest memory.
+ * Reports every 5s so the high-level interception can be verified in live gameplay.
+ */
+void tlg_js_trace_report_tick(uint64_t now_ms) {
+    if (!tlg_js_trace_enabled) return;
+    static uint64_t last_ms, last_count;
+    if (last_ms && now_ms - last_ms < 5000) return;
+    const uint64_t calls = __atomic_load_n(&tlg_js_trace_indexed_calls, __ATOMIC_RELAXED);
+    if (last_ms)
+        printf("Js native bridge: DrawIndexedCommon calls +%llu / 5s, total %llu\n",
+               (unsigned long long)(calls - last_count), (unsigned long long)calls);
+    last_ms = now_ms;
+    last_count = calls;
+}
 static void isa_report_hook(void) {
     if (isa_table) isa_rewrite_report(isa_table, stdout);
     if (tlg_js_trace_enabled)
