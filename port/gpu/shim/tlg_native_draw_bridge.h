@@ -32,13 +32,18 @@ inline bool Enabled() {
 
 class Bridge {
 public:
-    static constexpr unsigned PacketWords = 3;
+    enum class Kind : std::uint8_t { DrawAuto = 1, DrawIndexed = 2, DispatchDirect = 3 };
+    static constexpr unsigned PacketWords = 3; // DrawIndexAuto including PM4 header
+    static constexpr unsigned IndexedWords = 5; // DrawIndexOffset2 including header
+    static constexpr unsigned DispatchWords = 5; // DispatchDirect including header
+    static constexpr unsigned MaxPacketWords = 5;
 
     // The Gnm helper writes a 3-word DrawIndexAuto packet plus a 4-word NOP.
     // Keep the complete original 7-word command unchanged. No guest pointers
     // survive beyond comparison and no Vulkan objects are cached here.
-    void Publish(const std::uint32_t* packet) {
-        if (!Enabled() || !packet) {
+    void Publish(const std::uint32_t* packet, Kind kind = Kind::DrawAuto,
+                 unsigned words = PacketWords) {
+        if (!Enabled() || !packet || words == 0 || words > MaxPacketWords) {
             return;
         }
         const auto index = Slot(packet);
@@ -48,15 +53,19 @@ public:
             overwritten_.fetch_add(1, std::memory_order_relaxed);
         }
         entry.address = packet;
-        std::memcpy(entry.words.data(), packet, sizeof(entry.words));
+        entry.kind = kind;
+        entry.count = words;
+        entry.words = {};
+        std::memcpy(entry.words.data(), packet, words * sizeof(std::uint32_t));
         published_.fetch_add(1, std::memory_order_relaxed);
     }
 
     // Called only after the GPU parser established a DrawIndexAuto packet with
     // exactly two payload words. A modified/reused command never trusts the
     // hint; instead the unmodified PM4 decoder runs.
-    bool TryTake(const std::uint32_t* packet) {
-        if (!Enabled() || !packet) {
+    bool TryTake(const std::uint32_t* packet, Kind kind = Kind::DrawAuto,
+                 unsigned words = PacketWords) {
+        if (!Enabled() || !packet || words == 0 || words > MaxPacketWords) {
             return false;
         }
         const auto index = Slot(packet);
@@ -66,10 +75,10 @@ public:
             missed_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
-        std::array<std::uint32_t, PacketWords> current{};
-        std::memcpy(current.data(), packet, sizeof(current));
+        std::array<std::uint32_t, MaxPacketWords> current{};
+        std::memcpy(current.data(), packet, words * sizeof(std::uint32_t));
         entry.address = nullptr; // never replay stale metadata on command-buffer reuse
-        if (entry.words != current) {
+        if (entry.kind != kind || entry.count != words || entry.words != current) {
             rejected_.fetch_add(1, std::memory_order_relaxed);
             return false;
         }
@@ -98,7 +107,9 @@ public:
 private:
     struct Entry {
         const std::uint32_t* address = nullptr;
-        std::array<std::uint32_t, PacketWords> words{};
+        Kind kind = Kind::DrawAuto;
+        unsigned count = 0;
+        std::array<std::uint32_t, MaxPacketWords> words{};
     };
     static constexpr std::size_t Capacity = 1u << 14;
     static constexpr std::size_t Stripes = 64;
