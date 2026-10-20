@@ -193,6 +193,15 @@ bool DeviceResources::CreateGraphicsPipeline(
     return true;
 }
 
+bool DeviceResources::QueryGraphicsPipeline(std::uint64_t guest,
+                                           std::uint64_t& handle) const {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->pipelines.find(guest);
+    if (it == state_->pipelines.end() || !it->second->pipeline) return false;
+    handle = Identity(static_cast<VkPipeline>(*it->second->pipeline));
+    return true;
+}
+
 void DeviceResources::RetireGraphicsPipeline(std::uint64_t guest) {
     std::scoped_lock lock{state_->mutex};
     auto it = state_->pipelines.find(guest);
