@@ -49,6 +49,8 @@ TEXT = {
                       'Modo GPU estável (2 workers, shaders síncronos; recomendado)'),
     'native_draw_bridge': ('Experimental Vulkan draw bridge (developer test)',
                            'Bridge de desenho Vulkan experimental (teste de desenvolvedor)'),
+    'native_js_trace': ('Capture v1.00 JsDeviceContext calls (research; original rendering)',
+                        'Capturar chamadas JsDeviceContext v1.00 (pesquisa; renderização original)'),
     'show_fps': ('Show FPS overlay at start (F10 toggles)', 'Mostrar overlay de FPS ao iniciar (F10 alterna)'),
     'vram': ('Texture cache budget (MB of VRAM)', 'Orçamento do cache de texturas (MB de VRAM)'),
     'vram_hint': ('6 GB card: 5600 · 8 GB: 7000 · 12 GB: 10500 · 16 GB: 14000 · 24 GB: 21500. This is video card memory (VRAM), not RAM; never above your card\'s VRAM.',
@@ -317,6 +319,7 @@ class Launcher:
         self.fps_version_label.grid(row=7, column=0, columnspan=2, sticky='w')
         self.check(video, 8, 'gpu_stability')
         self.check(video, 9, 'native_draw_bridge')
+        self.check(video, 10, 'native_js_trace')
         ttk.Label(video, text=self.t('vram'), wraplength=220).grid(row=3, column=0, sticky='w', pady=(6, 0))
         vram = tk.IntVar(value=int(self.settings['vram_budget_mb']))
         self.vars['vram_budget_mb'] = vram
@@ -325,7 +328,7 @@ class Launcher:
         spin.grid(row=3, column=1, sticky='w', padx=6, pady=(6, 0))
         spin.bind('<FocusOut>', lambda _: self.changed())
         ttk.Label(video, text=self.t('vram_hint'), foreground='#777', wraplength=360).grid(row=4, column=0, columnspan=2, sticky='w')
-        self.build_filters(video, 11)
+        self.build_filters(video, 12)
 
         log_frame = ttk.LabelFrame(main, text='Log', padding=4)
         log_frame.grid(row=2, column=2, sticky='nsew', **pad)
