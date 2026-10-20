@@ -2,6 +2,7 @@
 #include "tlg_native_device_resources.h"
 #include "tlg_native_gcn_compiler.h"
 #include "tlg_native_spirv_registry.h"
+#include "shader_recompiler/resource.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include <vk_mem_alloc.h>
@@ -164,8 +165,22 @@ bool DeviceResources::CreateGraphicsPipeline(
     if (fs_result != vk::Result::eSuccess) return false;
 
     auto resource = std::make_unique<State::GraphicsPipeline>();
+    // The existing GCN -> SPIR-V translator uses Shader::PushData for
+    // viewport mapping, stage user data and buffer offsets. Expose the same
+    // canonical 128-byte-or-smaller ABI even for descriptor-free shaders.
+    // Full native Js rendering must supply *verified* values before drawing.
+    const vk::PushConstantRange push_constant{
+        .stageFlags = vk::ShaderStageFlagBits::eVertex |
+                      vk::ShaderStageFlagBits::eFragment,
+        .offset = 0,
+        .size = sizeof(Shader::PushData),
+    };
+    const vk::PipelineLayoutCreateInfo layout_info{
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_constant,
+    };
     auto [layout_result, layout] =
-        device.createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
+        device.createPipelineLayoutUnique(layout_info);
     if (layout_result != vk::Result::eSuccess) return false;
     resource->layout = std::move(layout);
 
