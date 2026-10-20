@@ -16,6 +16,7 @@
 namespace TlgNativeVk {
 namespace {
 constexpr std::uint64_t SmokeTargetId = 0xfffffffffffe1001ull;
+constexpr std::uint64_t SmokePipelineId = 0xfffffffffffe1002ull;
 constexpr vk::Extent2D SmokeSize{64, 64};
 constexpr vk::Format SmokeFormat = vk::Format::eR8G8B8A8Unorm;
 }
@@ -23,8 +24,7 @@ struct TriangleSmoke::State {
     const Vulkan::Instance& instance;
     Vulkan::Scheduler& scheduler;
     DeviceResources& resources;
-    vk::UniquePipelineLayout layout;
-    vk::UniquePipeline pipeline;
+    vk::Pipeline pipeline{}; // owned by DeviceResources, not by the smoke
     vk::ImageView color_view{};
     VkImage color_image = VK_NULL_HANDLE;
     VkBuffer readback_buffer = VK_NULL_HANDLE;
@@ -45,8 +45,7 @@ TriangleSmoke::~TriangleSmoke() {
     // This only happens for the opt-in native smoke at teardown.
     state_->scheduler.EndRendering();
     state_->scheduler.Finish();
-    state_->pipeline.reset();
-    state_->layout.reset();
+    state_->resources.RetireGraphicsPipeline(SmokePipelineId);
     if (state_->readback_buffer != VK_NULL_HANDLE) {
         vmaDestroyBuffer(state_->instance.GetAllocator(), state_->readback_buffer,
                          state_->readback_allocation);
@@ -102,76 +101,19 @@ bool TriangleSmoke::Init() {
                            state_->readback_allocation, 0, readback_size) != VK_SUCCESS)
         return false;
 
-    const auto device = state_->instance.GetDevice();
-    auto [layout_result, layout] = device.createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
-    if (layout_result != vk::Result::eSuccess) return false;
-    state_->layout = std::move(layout);
-
-    const vk::ShaderModule vertex = Vulkan::CompileSPV(FS_TRI_VERT, device);
-    const vk::ShaderModule fragment = Vulkan::CompileSPV(NATIVE_TRIANGLE_FRAG, device);
-    if (!vertex || !fragment) {
-        if (vertex) device.destroyShaderModule(vertex);
-        if (fragment) device.destroyShaderModule(fragment);
+    // Build the actual standalone Vulkan pipeline through the independent
+    // native resource owner, without any PM4/GCN shader state or pipeline cache.
+    if (!state_->resources.CreateGraphicsPipeline(
+            SmokePipelineId, FS_TRI_VERT, NATIVE_TRIANGLE_FRAG,
+            VK_FORMAT_R8G8B8A8_UNORM))
         return false;
-    }
-    const std::array stages{
-        vk::PipelineShaderStageCreateInfo{
-            .stage = vk::ShaderStageFlagBits::eVertex,
-            .module = vertex,
-            .pName = "main",
-        },
-        vk::PipelineShaderStageCreateInfo{
-            .stage = vk::ShaderStageFlagBits::eFragment,
-            .module = fragment,
-            .pName = "main",
-        },
-    };
-    const vk::PipelineRenderingCreateInfo rendering{
-        .colorAttachmentCount = 1,
-        .pColorAttachmentFormats = &SmokeFormat,
-    };
-    const vk::PipelineVertexInputStateCreateInfo vertex_input{};
-    const vk::PipelineInputAssemblyStateCreateInfo assembly{
-        .topology = vk::PrimitiveTopology::eTriangleList,
-    };
-    const vk::PipelineViewportStateCreateInfo viewport{.viewportCount=1,.scissorCount=1};
-    const vk::PipelineRasterizationStateCreateInfo raster{
-        .polygonMode = vk::PolygonMode::eFill,
-        .cullMode = vk::CullModeFlagBits::eNone,
-        .frontFace = vk::FrontFace::eCounterClockwise,
-        .lineWidth = 1.0f,
-    };
-    const vk::PipelineMultisampleStateCreateInfo samples{
-        .rasterizationSamples = vk::SampleCountFlagBits::e1,
-    };
-    const vk::PipelineColorBlendAttachmentState blend_attachment{
-        .colorWriteMask = vk::ColorComponentFlagBits::eR |
-                          vk::ColorComponentFlagBits::eG |
-                          vk::ColorComponentFlagBits::eB |
-                          vk::ColorComponentFlagBits::eA,
-    };
-    const vk::PipelineColorBlendStateCreateInfo blend{
-        .attachmentCount = 1,
-        .pAttachments = &blend_attachment,
-    };
-    const std::array dynamic_states{vk::DynamicState::eViewport,vk::DynamicState::eScissor};
-    const vk::PipelineDynamicStateCreateInfo dynamic{
-        .dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size()),
-        .pDynamicStates = dynamic_states.data(),
-    };
-    auto [result, pipeline] = device.createGraphicsPipelineUnique(
-        {}, vk::GraphicsPipelineCreateInfo{
-            .pNext=&rendering, .stageCount=static_cast<std::uint32_t>(stages.size()),
-            .pStages=stages.data(), .pVertexInputState=&vertex_input,
-            .pInputAssemblyState=&assembly, .pViewportState=&viewport,
-            .pRasterizationState=&raster, .pMultisampleState=&samples,
-            .pColorBlendState=&blend, .pDynamicState=&dynamic,
-            .layout=*state_->layout,
-        });
-    device.destroyShaderModule(vertex);
-    device.destroyShaderModule(fragment);
-    if (result != vk::Result::eSuccess) return false;
-    state_->pipeline = std::move(pipeline);
+    std::uint64_t raw_handle = 0;
+    if (!state_->resources.QueryGraphicsPipeline(SmokePipelineId, raw_handle))
+        return false;
+    VkPipeline raw_pipeline = VK_NULL_HANDLE;
+    static_assert(sizeof(raw_pipeline) == sizeof(raw_handle));
+    std::memcpy(&raw_pipeline, &raw_handle, sizeof(raw_pipeline));
+    state_->pipeline = vk::Pipeline{raw_pipeline};
     state_->initialized = true;
     return true;
 }
@@ -183,7 +125,7 @@ bool TriangleSmoke::RecordOnce() {
     state_->scheduler.EndRendering();
     if (!state_->resources.RecordColorAttachmentTransition(SmokeTargetId, state_->scheduler))
         return false;
-    const auto pipeline = *state_->pipeline;
+    const auto pipeline = state_->pipeline;
     const auto color = state_->color_view;
     const auto native_image = vk::Image{state_->color_image};
     const auto staging = vk::Buffer{state_->readback_buffer};
