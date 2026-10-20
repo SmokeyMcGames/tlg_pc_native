@@ -24,6 +24,9 @@ struct Recorder {
         events->push_back({3,0,count,instances,first_index,
                            std::uint32_t(vertex_offset),first_instance});
     }
+    void dispatch(std::uint32_t x, std::uint32_t y, std::uint32_t z) {
+        events->push_back({4,0,x,y,z,0,0});
+    }
 };
 int main() {
     std::vector<Entry> events;
@@ -40,5 +43,11 @@ int main() {
     assert(events.size()==4 && events[0].pipeline==12 && events[2].pipeline==18);
     assert(events[1].operation==2 && events[3].operation==2);
     assert(events[1].first_vertex==4 && events[3].count==6);
+    events.clear();
+    const TlgNativeVk::Dispatch compute{8,4,2};
+    TlgNativeVk::EmitComputeDispatch(recorder,1,33,compute);
+    assert(events.size()==2 && events[0].pipeline==33);
+    assert(events[1].operation==4 && events[1].count==8);
+    assert(events[1].instances==4 && events[1].first_index==2);
     return 0;
 }
