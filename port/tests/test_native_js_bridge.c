@@ -15,6 +15,8 @@
 #endif
 
 __attribute__((used)) uintptr_t tlg_js_indexed_gateway;
+__attribute__((used)) uintptr_t tlg_js_instanced_gateway;
+__attribute__((used)) volatile uint64_t tlg_js_trace_instanced_calls;
 __attribute__((used)) volatile uint64_t tlg_js_trace_indexed_calls;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_context;
 volatile uintptr_t tlg_js_trace_last_arg1, tlg_js_trace_last_arg2, tlg_js_trace_last_arg3;
@@ -31,6 +33,14 @@ static void hook_entry(void) {
         "popfq\n\t"
         "jmp *tlg_js_indexed_gateway(%rip)\n\t");
 }
+__attribute__((naked, used, noinline))
+static void hook_instanced_entry(void) {
+    __asm__ volatile(
+        "pushfq\n\t"
+        "lock incq tlg_js_trace_instanced_calls(%rip)\n\t"
+        "popfq\n\t"
+        "jmp *tlg_js_instanced_gateway(%rip)\n\t");
+}
 static unsigned char *exec_page(void) {
 #ifdef _WIN32
     return (unsigned char*)VirtualAlloc(NULL, 4096, MEM_RESERVE | MEM_COMMIT,
@@ -44,14 +54,17 @@ static unsigned char *exec_page(void) {
 
 int main(void) {
     /* A 20 MB synthetic eboot image tests the exact offset guard; no game data. */
-    const size_t n = TLG_JS_100_INDEXED_ENTRY + 128;
+    const size_t n = TLG_JS_100_INSTANCED_ENTRY + 128;
     uint8_t *fake = (uint8_t *)calloc(n, 1);
     assert(fake);
     assert(!tlg_js_100_signature_match(fake, n));
     memcpy(fake + TLG_JS_100_INDEXED_ENTRY, tlg_js_100_indexed_fingerprint,
            TLG_JS_FINGERPRINT_BYTES);
     assert(tlg_js_100_signature_match(fake, n));
-    assert(!tlg_js_100_signature_match(fake, n - 129));
+    memcpy(fake + TLG_JS_100_INSTANCED_ENTRY, tlg_js_100_instanced_fingerprint,
+           TLG_JS_FINGERPRINT_BYTES);
+    assert(tlg_js_100_instanced_signature_match(fake, n));
+    assert(!tlg_js_100_instanced_signature_match(fake, TLG_JS_100_INSTANCED_ENTRY));
     fake[TLG_JS_100_INDEXED_ENTRY + 5] ^= 0x01;
     assert(!tlg_js_100_signature_match(fake, n));
     free(fake);
@@ -63,9 +76,9 @@ int main(void) {
      */
     static const unsigned char function[] = {
         0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
-        0x41, 0x55, 0x41, 0x54, 0x53, 0x50,
-        0x58, 0x5b, 0x41, 0x5c, 0x41, 0x5d, 0x41, 0x5e,
-        0x41, 0x5f, 0x5d, 0xb8, 0x2a, 0, 0, 0, 0xc3
+        0x41, 0x54, 0x53, 0x48, 0x89, 0xfb,
+        0x5b, 0x41, 0x5c, 0x41, 0x5e, 0x41, 0x5f,
+        0x5d, 0xb8, 0x2a, 0, 0, 0, 0xc3
     };
     memcpy(machine, function, sizeof(function));
     typedef int (__attribute__((sysv_abi)) *GuestFunction)(void *, void *, void *, void *);
@@ -89,6 +102,27 @@ int main(void) {
     assert(tlg_js_trace_last_arg1 == 0x444);
     assert(tlg_js_trace_last_arg2 == 0x555);
     assert(tlg_js_trace_last_arg3 == 0x666);
+    /* Second verified v01.00 high-level entry: different prologue and
+     * signature, same safe trampoline structure. */
+    static const unsigned char function_instanced[] = {
+        0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+        0x41, 0x55, 0x41, 0x54, 0x53, 0x50,
+        0x58, 0x5b, 0x41, 0x5c, 0x41, 0x5d, 0x41, 0x5e,
+        0x41, 0x5f, 0x5d, 0xb8, 0x2a, 0, 0, 0, 0xc3,
+    };
+    memcpy(machine + 512, function_instanced, sizeof(function_instanced));
+    GuestFunction instanced_fn = (GuestFunction)(machine + 512);
+    assert(instanced_fn((void *)(uintptr_t)0x234567, 0, 0, 0) == 42);
+    assert(tlg_js_build_trampoline(machine + 640, 4096 - 640, machine + 512,
+                                   TLG_JS_PROLOGUE_BYTES,
+                                   (uintptr_t)(machine + 512 + TLG_JS_PROLOGUE_BYTES)) ==
+           TLG_JS_TRAMPOLINE_BYTES);
+    tlg_js_instanced_gateway = (uintptr_t)(machine + 640);
+    tlg_js_write_absolute_jump(machine + 512, (uintptr_t)&hook_instanced_entry);
+    __builtin___clear_cache((char *)(machine + 512), (char *)(machine + 576));
+    assert(instanced_fn((void *)(uintptr_t)0x234567, 0, 0, 0) == 42);
+    assert(instanced_fn((void *)(uintptr_t)0x345678, 0, 0, 0) == 42);
+    assert(tlg_js_trace_instanced_calls == 2);
 #ifdef _WIN32
     VirtualFree(machine, 0, MEM_RELEASE);
 #else

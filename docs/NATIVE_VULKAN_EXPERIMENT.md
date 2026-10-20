@@ -84,12 +84,14 @@ This adds the first **true high-level guest-function interception** instead of
 only observing Gnm helper calls.
 
 - The original, user-provided **v01.00** eboot was disassembled to locate its
-  `DrawIndexedCommon` method at guest image offset `0x1319760`.
+  `DrawIndexedCommon` method at guest image offset `0x13198b0`.
 - Installation requires the matching TITLE_ID and APP_VER 01.00, executable
   mapping, and an independently checked **31-byte code fingerprint**.
 - The loader replaces the verified 14-byte prologue with an absolute x86-64
   jump, and replays that original prologue in an executable trampoline.
-- The entry records the guest context pointer and call count; it preserves
+- A second v01.00 hook intercepts `JsDeviceContext::DrawIndexedInstanced` at
+  `0x1319a00`, also using a verified 31-byte signature and its own trampoline.
+- The entries record guest context pointers and independent call counts; they preserve
   guest integer registers, XMM arguments, flags, and stack layout. The original
   method still executes normally.
 - Enable via the launcher checkbox "Capture v1.00 JsDeviceContext calls" or

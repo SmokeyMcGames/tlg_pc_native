@@ -52,6 +52,7 @@ static uintptr_t guest_code_end; /* end of the image and its stub areas (emulati
  * exit diagnostics callback. Never replace one report with the other.
  */
 extern volatile uint64_t tlg_js_trace_indexed_calls;
+extern volatile uint64_t tlg_js_trace_instanced_calls;
 extern volatile uintptr_t tlg_js_trace_last_context;
 extern volatile uintptr_t tlg_js_trace_last_arg1;
 extern volatile uintptr_t tlg_js_trace_last_arg2;
@@ -62,25 +63,30 @@ static int tlg_js_trace_enabled;
  */
 void tlg_js_trace_report_tick(uint64_t now_ms) {
     if (!tlg_js_trace_enabled) return;
-    static uint64_t last_ms, last_count;
+    static uint64_t last_ms, last_count, last_instanced;
     if (last_ms && now_ms - last_ms < 5000) return;
     const uint64_t calls = __atomic_load_n(&tlg_js_trace_indexed_calls, __ATOMIC_RELAXED);
+    const uint64_t instanced = __atomic_load_n(&tlg_js_trace_instanced_calls, __ATOMIC_RELAXED);
     if (last_ms)
-        printf("Js native bridge: DrawIndexedCommon +%llu / 5s, total %llu; "
-               "raw ctx=%p rsi=%p rdx=%p rcx=%p\n",
-               (unsigned long long)(calls - last_count), (unsigned long long)calls,
+        printf("Js native bridge: DrawIndexedCommon +%llu, DrawIndexedInstanced +%llu / 5s; "
+               "totals %llu/%llu; indexed ctx=%p rsi=%p rdx=%p rcx=%p\n",
+               (unsigned long long)(calls - last_count),
+               (unsigned long long)(instanced - last_instanced),
+               (unsigned long long)calls, (unsigned long long)instanced,
                (void *)__atomic_load_n(&tlg_js_trace_last_context, __ATOMIC_RELAXED),
                (void *)__atomic_load_n(&tlg_js_trace_last_arg1, __ATOMIC_RELAXED),
                (void *)__atomic_load_n(&tlg_js_trace_last_arg2, __ATOMIC_RELAXED),
                (void *)__atomic_load_n(&tlg_js_trace_last_arg3, __ATOMIC_RELAXED));
     last_ms = now_ms;
     last_count = calls;
+    last_instanced = instanced;
 }
 static void isa_report_hook(void) {
     if (isa_table) isa_rewrite_report(isa_table, stdout);
     if (tlg_js_trace_enabled)
-        printf("Js native bridge: v01.00 DrawIndexedCommon calls=%llu, last-context=%p\n",
+        printf("Js native bridge: v01.00 calls indexed=%llu, indexed-instanced=%llu, last-context=%p\n",
                (unsigned long long)__atomic_load_n(&tlg_js_trace_indexed_calls, __ATOMIC_RELAXED),
+               (unsigned long long)__atomic_load_n(&tlg_js_trace_instanced_calls, __ATOMIC_RELAXED),
                (void *)__atomic_load_n(&tlg_js_trace_last_context, __ATOMIC_RELAXED));
 }
 int vulkan_smoke(void);
@@ -744,6 +750,9 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
  */
 #if defined(__x86_64__)
 __attribute__((used)) uintptr_t tlg_js_indexed_gateway;
+__attribute__((used)) uintptr_t tlg_js_instanced_gateway;
+__attribute__((used)) volatile uint64_t tlg_js_trace_instanced_calls;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_instanced_last_context;
 __attribute__((used)) volatile uint64_t tlg_js_trace_indexed_calls;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_context;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg1;
@@ -764,6 +773,19 @@ static void tlg_js_indexed_entry(void) {
         "jmp *tlg_js_indexed_gateway(%rip)\n\t"
     );
 }
+/* DrawIndexedInstanced v01.00: capture the context, preserve every guest
+ * argument and SIMD register, then replay its own original prologue.
+ */
+__attribute__((naked, used, noinline))
+static void tlg_js_instanced_entry(void) {
+    __asm__ volatile(
+        "pushfq\n\t"
+        "lock incq tlg_js_trace_instanced_calls(%rip)\n\t"
+        "movq %rdi, tlg_js_trace_instanced_last_context(%rip)\n\t"
+        "popfq\n\t"
+        "jmp *tlg_js_instanced_gateway(%rip)\n\t"
+    );
+}
 #endif
 
 static void install_js_native_trace(const char *app0, Segment *segments,
@@ -781,27 +803,42 @@ static void install_js_native_trace(const char *app0, Segment *segments,
                serial, version);
         return;
     }
-    const uint64_t at = TLG_JS_100_INDEXED_ENTRY;
-    if (!mapped(segments, count, at, TLG_JS_FINGERPRINT_BYTES) ||
-        !tlg_js_100_signature_match(image, size)) {
-        puts("Js native bridge: 01.00 DrawIndexedCommon signature mismatch; disabled");
+    const uint64_t indexed = TLG_JS_100_INDEXED_ENTRY;
+    const uint64_t instanced = TLG_JS_100_INSTANCED_ENTRY;
+    /* Atomic feature-level policy: validate BOTH functions before patching EITHER.
+     * An unexpected game build leaves all guest code byte-for-byte intact. */
+    if (!mapped(segments, count, indexed, TLG_JS_FINGERPRINT_BYTES) ||
+        !mapped(segments, count, instanced, TLG_JS_FINGERPRINT_BYTES) ||
+        !tlg_js_100_signature_match(image, size) ||
+        !tlg_js_100_instanced_signature_match(image, size)) {
+        puts("Js native bridge: v01.00 indexed/instanced signature mismatch; no hooks installed");
         return;
     }
-    unsigned char *trampoline = allocate(page_size);
-    if (!tlg_js_build_trampoline(trampoline, page_size, image + at,
+    if (page_size < 256) {
+        puts("Js native bridge: unexpected page size, hooks disabled");
+        return;
+    }
+    unsigned char *trampolines = allocate(page_size);
+    if (!tlg_js_build_trampoline(trampolines, page_size, image + indexed,
                                  TLG_JS_PROLOGUE_BYTES,
-                                 (uintptr_t)(image + at + TLG_JS_PROLOGUE_BYTES))) {
-        puts("Js native bridge: failed to construct verified trampoline");
+                                 (uintptr_t)(image + indexed + TLG_JS_PROLOGUE_BYTES)) ||
+        !tlg_js_build_trampoline(trampolines + 128, page_size - 128, image + instanced,
+                                 TLG_JS_PROLOGUE_BYTES,
+                                 (uintptr_t)(image + instanced + TLG_JS_PROLOGUE_BYTES))) {
+        puts("Js native bridge: failed to construct verified trampolines; hooks disabled");
         return;
     }
-    protect(trampoline, page_size, 5);
-    tlg_js_indexed_gateway = (uintptr_t)trampoline;
+    protect(trampolines, page_size, 5);
+    tlg_js_indexed_gateway = (uintptr_t)trampolines;
+    tlg_js_instanced_gateway = (uintptr_t)(trampolines + 128);
     __atomic_thread_fence(__ATOMIC_RELEASE);
-    tlg_js_write_absolute_jump(image + at, (uintptr_t)tlg_js_indexed_entry);
+    tlg_js_write_absolute_jump(image + indexed, (uintptr_t)tlg_js_indexed_entry);
+    tlg_js_write_absolute_jump(image + instanced, (uintptr_t)tlg_js_instanced_entry);
     tlg_js_trace_enabled = 1;
     runtime_set_report_hook(isa_report_hook);
-    printf("Js native bridge: v01.00 DrawIndexedCommon interception active at guest+0x%llx "
-           "(read-only, original code replayed)\n", (unsigned long long)at);
+    printf("Js native bridge: v01.00 DrawIndexedCommon at +0x%llx and "
+           "DrawIndexedInstanced at +0x%llx intercepted (read-only; originals run)\n",
+           (unsigned long long)indexed, (unsigned long long)instanced);
 }
 
 /* G3PATCH2 (patches.py): the patches' image base, then byte writes at image offsets, applied

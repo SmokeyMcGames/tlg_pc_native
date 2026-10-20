@@ -20,6 +20,7 @@
  * These fourteen bytes have no PC-relative instructions and are safe to replay.
  */
 #define TLG_JS_100_INDEXED_ENTRY UINT64_C(0x13198b0)
+#define TLG_JS_100_INSTANCED_ENTRY UINT64_C(0x1319a00)
 #define TLG_JS_PROLOGUE_BYTES 14
 #define TLG_JS_FINGERPRINT_BYTES 31
 #define TLG_JS_TRAMPOLINE_BYTES (TLG_JS_PROLOGUE_BYTES + 14)
@@ -40,11 +41,33 @@ static const uint8_t tlg_js_100_indexed_fingerprint[TLG_JS_FINGERPRINT_BYTES] = 
     0x74, 0x0a, 0xc7, 0x83,
 };
 
+/* v01.00 JsDeviceContext::DrawIndexedInstanced, at guest+0x1319a00.
+ * Its in-function "DrawIndexedInstanced" diagnostic is referenced at 0x1319a62.
+ * First fourteen bytes contain only safe register/stack operations.
+ */
+static const uint8_t tlg_js_100_instanced_original[TLG_JS_PROLOGUE_BYTES] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+    0x41, 0x55, 0x41, 0x54, 0x53, 0x50,
+};
+static const uint8_t tlg_js_100_instanced_fingerprint[TLG_JS_FINGERPRINT_BYTES] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+    0x41, 0x55, 0x41, 0x54, 0x53, 0x50,
+    0x41, 0x89, 0xd6, 0x48, 0x89, 0xfb,
+    0x41, 0x89, 0xcc, 0x41, 0x89, 0xf7,
+    0x44, 0x39, 0xb3, 0x24, 0x47,
+};
+
 /* End-to-end source version and byte guards. We never scan blindly for code. */
 static inline int tlg_js_100_signature_match(const uint8_t *image, size_t image_size) {
     const uint64_t at = TLG_JS_100_INDEXED_ENTRY;
     return image && image_size >= at + TLG_JS_FINGERPRINT_BYTES &&
            memcmp(image + at, tlg_js_100_indexed_fingerprint, TLG_JS_FINGERPRINT_BYTES) == 0;
+}
+
+static inline int tlg_js_100_instanced_signature_match(const uint8_t *image, size_t image_size) {
+    const uint64_t at = TLG_JS_100_INSTANCED_ENTRY;
+    return image && image_size >= at + TLG_JS_FINGERPRINT_BYTES &&
+           memcmp(image + at, tlg_js_100_instanced_fingerprint, TLG_JS_FINGERPRINT_BYTES) == 0;
 }
 
 /* x86-64: jmp qword ptr [rip+0], followed by the absolute destination.
@@ -63,7 +86,8 @@ static inline int tlg_js_build_trampoline(uint8_t *out, size_t capacity,
                                           uintptr_t continuation) {
     if (!out || !original || length != TLG_JS_PROLOGUE_BYTES ||
         capacity < TLG_JS_TRAMPOLINE_BYTES ||
-        memcmp(original, tlg_js_100_indexed_original, length) != 0)
+        (memcmp(original, tlg_js_100_indexed_original, length) != 0 &&
+         memcmp(original, tlg_js_100_instanced_original, length) != 0))
         return 0;
     memcpy(out, original, length);
     tlg_js_write_absolute_jump(out + length, continuation);
