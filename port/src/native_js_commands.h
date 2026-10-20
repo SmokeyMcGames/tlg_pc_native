@@ -88,35 +88,39 @@ static inline int tlg_js_native_read_next(const TlgJsNativeRing *ring,
     return 1;
 }
 
-/* Pure translation to a *semantic candidate*; no GPU work is submitted.
- * The 1.00 DrawIndexedCommon code passes original RSI(indexCount) and
- * RDX(indexOffset) to the Gnm encoder.
- * DrawIndexedInstanced passes RSI(indexCount), RDX(instanceCount),
- * RCX(indexOffset). Other parameters remain opaque until their layout
- * is verified from the original game's code and visual parity tests.
+/* High-level semantics reverse-engineered from the exact original v01.00 ELF:
+ * guest+0x13198b0 JsDeviceContext::DrawIndexedCommon:
+ *   RSI = index_count; RDX = index_offset; RCX = vertex_base;
+ *   0x479c(context) <- RCX, and instance_count is forced to 1.
+ * guest+0x1319a00 JsDeviceContext::DrawIndexedInstanced:
+ *   RSI = index_count; RDX = instance_count; RCX = index_offset;
+ *   R8 = vertex_base; 0x479c(context) <- R8.
+ * Both functions then call sceGnmDrawIndexOffset with RDX=index_offset
+ * and RCX=index_count. Do not confuse index_offset (guest buffer) with
+ * Vulkan firstIndex when the index-buffer binding is already offset.
  */
 typedef struct TlgJsNativeDrawCandidate {
     uint64_t sequence, context;
     uint32_t kind;
     uint32_t index_count, instance_count, first_index;
-    uint64_t arg3_raw, arg4_raw;
+    uint32_t vertex_base;
+    uint64_t flags_or_aux; /* preserve R8/R9, no guessed meaning */
 } TlgJsNativeDrawCandidate;
 
 static inline int tlg_js_native_decode_draw(const TlgJsNativeCommand *record,
-                                              TlgJsNativeDrawCandidate *out) {
+                                             TlgJsNativeDrawCandidate *out) {
     if (!record || !out) return 0;
     if (record->kind != TLG_JS_NATIVE_INDEXED &&
         record->kind != TLG_JS_NATIVE_INSTANCED) return 0;
+    const int instanced = record->kind == TLG_JS_NATIVE_INSTANCED;
     out->sequence = record->ready;
     out->context = record->context;
     out->kind = (uint32_t)record->kind;
-    out->index_count = (uint32_t)record->arg0;
-    out->instance_count = record->kind == TLG_JS_NATIVE_INSTANCED
-                              ? (uint32_t)record->arg1 : 1;
-    out->first_index = (uint32_t)(record->kind == TLG_JS_NATIVE_INSTANCED
-                                     ? record->arg2 : record->arg1);
-    out->arg3_raw = record->arg3;
-    out->arg4_raw = record->arg4;
+    out->index_count = (uint32_t)record->arg0; /* RSI */
+    out->instance_count = instanced ? (uint32_t)record->arg1 : 1; /* RDX */
+    out->first_index = (uint32_t)(instanced ? record->arg2 : record->arg1);
+    out->vertex_base = (uint32_t)(instanced ? record->arg3 : record->arg2);
+    out->flags_or_aux = record->arg4;
     return 1;
 }
 
