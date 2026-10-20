@@ -31,6 +31,7 @@ struct TriangleSmoke::State {
     DeviceResources& resources;
     ResourceRegistry& registry;
     bool textured = false;
+    bool tiled = false; // exercises verified PS4 1D thin detile before Vulkan upload
     vk::ImageView color_view{};
     VkImage color_image = VK_NULL_HANDLE;
     VkBuffer readback_buffer = VK_NULL_HANDLE;
@@ -43,9 +44,11 @@ struct TriangleSmoke::State {
 
 TriangleSmoke::TriangleSmoke(const Vulkan::Instance& instance,
                               Vulkan::Scheduler& scheduler, DeviceResources& resources,
-                              ResourceRegistry& registry, bool texture_test)
+                              ResourceRegistry& registry, bool texture_test,
+                              bool tiled_texture_test)
     : state_{std::make_unique<State>(
-          instance, scheduler, resources, registry, texture_test)} {}
+          instance, scheduler, resources, registry,
+          texture_test || tiled_texture_test, tiled_texture_test)} {}
 TriangleSmoke::~TriangleSmoke() {
     if (!state_->target_created) return;
     // A deferred Scheduler::Record() closure may not have reached the GPU yet.
@@ -115,19 +118,39 @@ bool TriangleSmoke::Init() {
                            state_->readback_allocation, 0, readback_size) != VK_SUCCESS)
         return false;
 
-    // Synthetic texture is solid so the expected pixel is invariant under
-    // rasterization coordinates and sampler filtering. All source bytes are
-    // copied immediately into a private Vulkan staging allocation.
+    // Independent native Vulkan texture proof, never touching a game asset.
+    // The tiled variant first exercises the exact verified 1D thin microtile
+    // permutation, then independently binds the resulting VkImageView.
     if (state_->textured) {
-        std::array<std::uint8_t, 4u * 4u * 4u> pixels{};
-        for (std::size_t i = 0; i < pixels.size(); i += 4) {
-            pixels[i] = 16;
-            pixels[i + 1] = 64;
-            pixels[i + 2] = 128;
-            pixels[i + 3] = 255;
+        bool uploaded = false;
+        if (state_->tiled) {
+            std::array<std::uint8_t, 8u * 8u * 4u> tiled_pixels{};
+            for (std::uint32_t y = 0; y < 8; ++y) {
+                for (std::uint32_t x = 0; x < 8; ++x) {
+                    const auto pixel = PixelInMicroTile1DRgba8(
+                        x, y, Rgba8Tiling::Thin1DThin) * 4u;
+                    tiled_pixels[pixel] = static_cast<std::uint8_t>(x * 31u);
+                    tiled_pixels[pixel + 1] = static_cast<std::uint8_t>(y * 31u);
+                    tiled_pixels[pixel + 2] =
+                        static_cast<std::uint8_t>((x + y) * 14u);
+                    tiled_pixels[pixel + 3] = 255;
+                }
+            }
+            uploaded = state_->resources.CreateSampledTexture1DTiledRgba8(
+                SmokeTextureId, 8, 8, 8, 8, Rgba8Tiling::Thin1DThin,
+                tiled_pixels.data(), tiled_pixels.size());
+        } else {
+            std::array<std::uint8_t, 4u * 4u * 4u> pixels{};
+            for (std::size_t i = 0; i < pixels.size(); i += 4) {
+                pixels[i] = 16;
+                pixels[i + 1] = 64;
+                pixels[i + 2] = 128;
+                pixels[i + 3] = 255;
+            }
+            uploaded = state_->resources.CreateSampledTextureRGBA8(
+                SmokeTextureId, 4, 4, pixels.data(), 16, pixels.size());
         }
-        if (!state_->resources.CreateSampledTextureRGBA8(
-                SmokeTextureId, 4, 4, pixels.data(), 16, pixels.size()) ||
+        if (!uploaded ||
             !state_->resources.CreateNearestClampSampler(SmokeSamplerId))
             return false;
     }
@@ -354,17 +377,22 @@ bool TriangleSmoke::RecordOnce() {
     const std::uint8_t b = rgba[middle + 2], a = rgba[middle + 3];
     // fs_tri.vert supplies UV ~0.5 at the center; native_triangle.frag
     // outputs (uv.x, uv.y, 0.25, 1). Tolerance allows rasterization rounding.
-    const bool pass = state_->textured
-        ? (r >= 10 && r <= 22 && g >= 58 && g <= 70 &&
-           b >= 122 && b <= 134 && a >= 250)
-        : (r >= 90 && r <= 165 && g >= 90 && g <= 165 &&
-           b >= 50 && b <= 85 && a >= 250);
+    const bool pass = state_->tiled
+        ? (r >= 80 && r <= 140 && g >= 80 && g <= 140 &&
+           b >= 70 && b <= 135 && a >= 250)
+        : state_->textured
+            ? (r >= 10 && r <= 22 && g >= 58 && g <= 70 &&
+               b >= 122 && b <= 134 && a >= 250)
+            : (r >= 90 && r <= 165 && g >= 90 && g <= 165 &&
+               b >= 50 && b <= 85 && a >= 250);
     std::printf("Native Vulkan %s triangle GPU readback: %s "
                 "(center RGBA %u,%u,%u,%u; expected %s)\n",
-                state_->textured ? "sampled-texture" : "registry-indexed",
+                state_->tiled ? "1D-tiled sampled-texture"
+                    : state_->textured ? "sampled-texture" : "registry-indexed",
                 pass ? "PASS" : "FAIL", unsigned(r), unsigned(g),
                 unsigned(b), unsigned(a),
-                state_->textured ? "16,64,128,255" : "128,128,64,255");
+                state_->tiled ? "center ~109,109,98,255"
+                    : state_->textured ? "16,64,128,255" : "128,128,64,255");
     return pass;
 }
 } // namespace TlgNativeVk
