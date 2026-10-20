@@ -357,12 +357,50 @@ bool DeviceResources::CreateResourceFreeGraphicsPipelineFromGCN(
 
 bool DeviceResources::CreateGraphicsPipeline(
     std::uint64_t guest, std::span<const std::uint32_t> vertex_spirv,
-    std::span<const std::uint32_t> fragment_spirv, std::uint32_t color_format) {
+    std::span<const std::uint32_t> fragment_spirv, std::uint32_t color_format,
+    std::span<const NativeDescriptorBinding> resource_bindings) {
     if (!guest || color_format == VK_FORMAT_UNDEFINED ||
         vertex_spirv.size() < 5 || fragment_spirv.size() < 5 ||
         vertex_spirv.size() > (1u << 20) || fragment_spirv.size() > (1u << 20) ||
         vertex_spirv[0] != 0x07230203 || fragment_spirv[0] != 0x07230203)
         return false;
+
+    // The descriptor layout is supplied by verified Js shader reflection,
+    // not the PS4 GPU command register file. Any unsupported binding or
+    // capacity overflow refuses pipeline creation.
+    std::vector<vk::DescriptorSetLayoutBinding> layout_bindings;
+    layout_bindings.reserve(resource_bindings.size());
+    std::uint32_t next_binding = 0, descriptor_total = 0;
+    const auto max_push = state_->instance.MaxPushDescriptors();
+    for (const auto& description : resource_bindings) {
+        if (description.binding != next_binding ||
+            !description.descriptor_count || description.descriptor_count > 64 ||
+            descriptor_total > max_push ||
+            description.descriptor_count > max_push - descriptor_total)
+            return false;
+        vk::DescriptorType descriptor_type{};
+        switch (description.kind) {
+        case NativeDescriptorKind::StorageBuffer:
+            descriptor_type = vk::DescriptorType::eStorageBuffer; break;
+        case NativeDescriptorKind::SampledImage:
+            descriptor_type = vk::DescriptorType::eSampledImage; break;
+        case NativeDescriptorKind::StorageImage:
+            descriptor_type = vk::DescriptorType::eStorageImage; break;
+        case NativeDescriptorKind::Sampler:
+            descriptor_type = vk::DescriptorType::eSampler; break;
+        default:
+            return false;
+        }
+        layout_bindings.push_back({
+            .binding = description.binding,
+            .descriptorType = descriptor_type,
+            .descriptorCount = description.descriptor_count,
+            .stageFlags = vk::ShaderStageFlagBits::eVertex |
+                          vk::ShaderStageFlagBits::eFragment,
+        });
+        next_binding += description.descriptor_count;
+        descriptor_total += description.descriptor_count;
+    }
 
     const auto device = state_->instance.GetDevice();
     auto [vs_result, vs] = device.createShaderModuleUnique({
@@ -385,7 +423,23 @@ bool DeviceResources::CreateGraphicsPipeline(
         .offset = 0,
         .size = sizeof(Shader::PushData),
     };
+    vk::DescriptorSetLayout descriptor_handle{};
+    if (!layout_bindings.empty()) {
+        const vk::DescriptorSetLayoutCreateInfo create_layout{
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = static_cast<std::uint32_t>(layout_bindings.size()),
+            .pBindings = layout_bindings.data(),
+        };
+        auto [desc_result, descriptors] =
+            device.createDescriptorSetLayoutUnique(create_layout);
+        if (desc_result != vk::Result::eSuccess)
+            return false;
+        resource->descriptors = std::move(descriptors);
+        descriptor_handle = *resource->descriptors;
+    }
     const vk::PipelineLayoutCreateInfo layout_info{
+        .setLayoutCount = descriptor_handle ? 1u : 0u,
+        .pSetLayouts = descriptor_handle ? &descriptor_handle : nullptr,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &push_constant,
     };
@@ -464,6 +518,16 @@ bool DeviceResources::CreateGraphicsPipeline(
         state_->pipelines.emplace(guest, std::move(resource));
     }
     return true;
+}
+
+bool DeviceResources::QueryGraphicsPipelineLayout(
+    std::uint64_t guest, std::uint64_t& handle) const {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->pipelines.find(guest);
+    if (it == state_->pipelines.end() || !it->second->layout)
+        return false;
+    handle = Identity(static_cast<VkPipelineLayout>(*it->second->layout));
+    return handle != 0;
 }
 
 bool DeviceResources::QueryGraphicsPipeline(std::uint64_t guest,
