@@ -77,15 +77,17 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     const char* native_triangle = std::getenv("TLG_NATIVE_VULKAN_TRIANGLE");
     const char* native_texture = std::getenv("TLG_NATIVE_VULKAN_TEXTURE");
     const char* native_tiled = std::getenv("TLG_NATIVE_VULKAN_TILED_TEXTURE");
+    const char* native_macro = std::getenv("TLG_NATIVE_VULKAN_MACRO_TEXTURE");
     const char* native_compute = std::getenv("TLG_NATIVE_COMPUTE_SMOKE");
     const bool smoke = native_smoke && native_smoke[0] == '1' && !native_smoke[1];
     const bool triangle = native_triangle && native_triangle[0] == '1' && !native_triangle[1];
     const bool texture_test = native_texture && native_texture[0] == '1' && !native_texture[1];
     const bool tiled_test = native_tiled && native_tiled[0] == '1' && !native_tiled[1];
+    const bool macro_test = native_macro && native_macro[0] == '1' && !native_macro[1];
     const bool compute = native_compute && native_compute[0] == '1' && !native_compute[1];
     if (!EmulatorSettings.IsNullGPU() &&
         ((native_resources && native_resources[0] == '1' && !native_resources[1]) ||
-         smoke || triangle || compute || texture_test || tiled_test)) {
+         smoke || triangle || compute || texture_test || tiled_test || macro_test)) {
         native_device_resources =
             std::make_unique<TlgNativeVk::DeviceResources>(instance, native_resource_registry);
         if (smoke) {
@@ -105,12 +107,12 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
             if (color) native_device_resources->RetireColorTarget(SmokeResource + 1);
             if (allocated || color) native_device_resources->CollectRetiredAfterIdle();
         }
-        if (triangle || texture_test || tiled_test) {
+        if (triangle || texture_test || tiled_test || macro_test) {
             // Texture smoke supersedes the gradient triangle when both are
             // set. Both use the same isolated offscreen target and unique IDs.
             native_triangle_smoke = std::make_unique<TlgNativeVk::TriangleSmoke>(
                 instance, scheduler, *native_device_resources,
-                native_resource_registry, texture_test, tiled_test);
+                native_resource_registry, texture_test, tiled_test, macro_test);
             if (!native_triangle_smoke->Init()) {
                 std::puts("Native Vulkan offscreen triangle: pipeline/resource initialization FAILED");
                 native_triangle_smoke.reset();
