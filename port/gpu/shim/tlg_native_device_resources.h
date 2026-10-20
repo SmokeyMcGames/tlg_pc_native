@@ -6,6 +6,7 @@
 // This does not create guest textures or shader pipelines yet. GPU operations
 // remain opt-in until resource and framebuffer parity are established.
 #include "tlg_native_vk_resources.h"
+#include "tlg_native_texture_layout.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -98,6 +99,27 @@ public:
     bool CreateColorTarget(std::uint64_t guest_id, std::uint32_t width,
                            std::uint32_t height, std::uint32_t vk_format);
     void RetireColorTarget(std::uint64_t guest_id);
+
+    // First genuinely native sampled-texture path. Accepted input must be
+    // linear RGBA8 (not PS4 tiled), single mip and 2D. Staging memory stays
+    // alive until the image upload and all dependent GPU draws have retired.
+    bool CreateSampledTextureRGBA8(
+        std::uint64_t guest_id, std::uint32_t width, std::uint32_t height,
+        const void* source, std::uint64_t source_row_pitch,
+        std::uint64_t source_available_bytes);
+    bool RecordSampledTextureUpload(std::uint64_t guest_id,
+                                    Vulkan::Scheduler& scheduler);
+    void RetireSampledTexture(std::uint64_t guest_id);
+    bool CreateNearestClampSampler(std::uint64_t guest_id);
+    void RetireSampler(std::uint64_t guest_id);
+
+    struct SampledImageInfo {
+        std::uint64_t image_view = 0, sampler = 0;
+        std::uint32_t width = 0, height = 0;
+        std::uint64_t image_generation = 0, sampler_generation = 0;
+    };
+    bool QuerySampledBinding(std::uint64_t texture_id, std::uint64_t sampler_id,
+                             SampledImageInfo& result) const;
 
     struct ColorTargetInfo {
         std::uint64_t image = 0, view = 0;
