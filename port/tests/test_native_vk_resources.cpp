@@ -27,6 +27,8 @@ int main() {
     assert(!gpu.RegisterIndexBuffer(0x200,555,0));
     assert(gpu.RegisterPipeline(0x100,33));
     assert(gpu.RegisterComputePipeline(0x101,44));
+    assert(!gpu.RegisterComputePipeline(0x100,99)); // graphics ID collision
+    assert(!gpu.RegisterPipeline(0x101,99)); // compute ID collision
     std::uint64_t compute_handle=0;
     assert(gpu.LookupComputePipeline(0x101,compute_handle));
     assert(compute_handle==44);
