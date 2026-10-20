@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 
 namespace Vulkan { class Instance; class Scheduler; }
 
@@ -23,6 +24,15 @@ public:
     // The only immediately drawable kind currently implemented: host-staged
     // GPU index data with an explicit 16/32-bit format. No guest pointer is
     // retained; initial_data must have exactly index_count * index_width bytes.
+    // Independent native Vulkan pipeline from already-translated SPIR-V.
+    // Initial implementation supports a fixed full-screen triangle vertex
+    // layout and one color attachment. Not yet a general game material path.
+    bool CreateGraphicsPipeline(std::uint64_t guest_id,
+                                std::span<const std::uint32_t> vertex_spirv,
+                                std::span<const std::uint32_t> fragment_spirv,
+                                std::uint32_t color_format);
+    void RetireGraphicsPipeline(std::uint64_t guest_id);
+
     bool CreateIndexBuffer(std::uint64_t guest_id, std::uint64_t index_count,
                            std::uint32_t index_width, const void* initial_data,
                            std::size_t initial_bytes);
