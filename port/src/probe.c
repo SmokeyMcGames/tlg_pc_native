@@ -13,6 +13,7 @@
 #include "actor_hook.h"
 #include "damage_hook.h"
 #include "native_js_bridge.h"
+#include "native_js_commands.h"
 #include "gpu/tlggpu.h"
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error This prototype requires x86-64 GCC or Clang (including MinGW).
@@ -768,16 +769,39 @@ __attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg1;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg2;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg3;
 
+/* Atomic game-level native draw stream: the GPU thread drains it per submission.
+ * Opt-in only. This ring is owned by the loader and contains NO copied game assets.
+ */
+__attribute__((used, aligned(64))) TlgJsNativeRing tlg_js_native_ring;
+
 /* No C call, stack change, or XMM clobbers on the guest's hot draw path. */
 __attribute__((naked, used, noinline))
 static void tlg_js_indexed_entry(void) {
     __asm__ volatile(
         "pushfq\n\t"
-        "lock incq tlg_js_trace_indexed_calls(%rip)\n\t"
-        "movq %rdi, tlg_js_trace_last_context(%rip)\n\t"
-        "movq %rsi, tlg_js_trace_last_arg1(%rip)\n\t"
-        "movq %rdx, tlg_js_trace_last_arg2(%rip)\n\t"
-        "movq %rcx, tlg_js_trace_last_arg3(%rip)\n\t"
+        "pushq %rax\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "leaq tlg_js_native_ring(%rip), %r10\n\t"
+        "movq $1, %rax\n\t"
+        "lock xaddq %rax, (%r10)\n\t"
+        "leaq 1(%rax), %r11\n\t"
+        "andq $4095, %rax\n\t"
+        "shlq $6, %rax\n\t"
+        "addq $64, %r10\n\t"
+        "addq %rax, %r10\n\t"
+        "movq $0, (%r10)\n\t"
+        "movq $1, 8(%r10)\n\t"
+        "movq %rdi, 16(%r10)\n\t"
+        "movq %rsi, 24(%r10)\n\t"
+        "movq %rdx, 32(%r10)\n\t"
+        "movq %rcx, 40(%r10)\n\t"
+        "movq %r8, 48(%r10)\n\t"
+        "movq %r9, 56(%r10)\n\t"
+        "movq %r11, (%r10)\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %rax\n\t"
         "popfq\n\t"
         "jmp *tlg_js_indexed_gateway(%rip)\n\t"
     );
@@ -789,11 +813,29 @@ __attribute__((naked, used, noinline))
 static void tlg_js_instanced_entry(void) {
     __asm__ volatile(
         "pushfq\n\t"
-        "lock incq tlg_js_trace_instanced_calls(%rip)\n\t"
-        "movq %rdi, tlg_js_trace_instanced_last_context(%rip)\n\t"
-        "movq %rsi, tlg_js_trace_instanced_last_arg1(%rip)\n\t"
-        "movq %rdx, tlg_js_trace_instanced_last_arg2(%rip)\n\t"
-        "movq %rcx, tlg_js_trace_instanced_last_arg3(%rip)\n\t"
+        "pushq %rax\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "leaq tlg_js_native_ring(%rip), %r10\n\t"
+        "movq $1, %rax\n\t"
+        "lock xaddq %rax, (%r10)\n\t"
+        "leaq 1(%rax), %r11\n\t"
+        "andq $4095, %rax\n\t"
+        "shlq $6, %rax\n\t"
+        "addq $64, %r10\n\t"
+        "addq %rax, %r10\n\t"
+        "movq $0, (%r10)\n\t"
+        "movq $2, 8(%r10)\n\t"
+        "movq %rdi, 16(%r10)\n\t"
+        "movq %rsi, 24(%r10)\n\t"
+        "movq %rdx, 32(%r10)\n\t"
+        "movq %rcx, 40(%r10)\n\t"
+        "movq %r8, 48(%r10)\n\t"
+        "movq %r9, 56(%r10)\n\t"
+        "movq %r11, (%r10)\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %rax\n\t"
         "popfq\n\t"
         "jmp *tlg_js_instanced_gateway(%rip)\n\t"
     );
