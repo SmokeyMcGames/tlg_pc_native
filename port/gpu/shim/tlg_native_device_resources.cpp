@@ -138,21 +138,63 @@ bool DeviceResources::UpdateIndexBuffer(std::uint64_t id, std::uint64_t first,
                                         std::size_t nbytes, std::uint64_t epoch) {
     if (!id || !source || !nbytes || (width != 2 && width != 4) ||
         nbytes % width || !epoch) return false;
+
     std::scoped_lock lock{state_->mutex};
     const auto it = state_->active.find(id);
     if (it == state_->active.end() || it->second.index_width != width ||
         first > it->second.index_count ||
         nbytes / width > it->second.index_count - first) return false;
-    void* mapped = nullptr;
-    const VkResult map = vmaMapMemory(state_->allocator, it->second.allocation, &mapped);
-    if (map != VK_SUCCESS || !mapped) return false;
-    std::memcpy(static_cast<unsigned char*>(mapped) + first * width, source, nbytes);
-    const VkResult flush = vmaFlushAllocation(state_->allocator,
-                                               it->second.allocation, first * width, nbytes);
-    vmaUnmapMemory(state_->allocator, it->second.allocation);
-    if (flush != VK_SUCCESS) return false;
-    // Require the draw path to record a matching host-write -> index-read
-    // VkBufferMemoryBarrier2 before acknowledging the upload epoch.
+
+    // Copy-on-write is essential: the old allocation may be referenced by
+    // Vulkan submissions that have not completed. Never mutate it in place.
+    // This prototype copies the full host-visible buffer; a future native
+    // streaming allocator should batch updates using per-frame staging rings.
+    const std::size_t total = it->second.index_count * width;
+    const VkBufferCreateInfo bi{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = total,
+        .usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    const VmaAllocationCreateInfo ai{
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                 VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                 VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+    };
+    VmaAllocationInfo previous{};
+    vmaGetAllocationInfo(state_->allocator, it->second.allocation, &previous);
+    if (!previous.pMappedData) return false;
+    VkBuffer next_gpu = VK_NULL_HANDLE;
+    VmaAllocation next_alloc = VK_NULL_HANDLE;
+    VmaAllocationInfo next{};
+    if (vmaCreateBuffer(state_->allocator, &bi, &ai, &next_gpu,
+                        &next_alloc, &next) != VK_SUCCESS) return false;
+    if (!next.pMappedData) {
+        vmaDestroyBuffer(state_->allocator, next_gpu, next_alloc);
+        return false;
+    }
+
+    std::memcpy(next.pMappedData, previous.pMappedData, total);
+    std::memcpy(static_cast<unsigned char*>(next.pMappedData) + first * width,
+                source, nbytes);
+    if (vmaFlushAllocation(state_->allocator, next_alloc, 0, total) != VK_SUCCESS) {
+        vmaDestroyBuffer(state_->allocator, next_gpu, next_alloc);
+        return false;
+    }
+
+    // Publishing a new handle increments its resource generation and
+    // invalidates previous bindings. The caller MUST bind the new handle and
+    // record a HOST_WRITE -> INDEX_READ Vulkan barrier before a draw is valid.
+    if (!state_->registry.RegisterIndexBuffer(id, Identity(next_gpu),
+                                              it->second.index_count)) {
+        vmaDestroyBuffer(state_->allocator, next_gpu, next_alloc);
+        return false;
+    }
+    const auto old = it->second;
+    it->second = {next_gpu, next_alloc, old.index_count, width};
+    state_->retired.push_back(old);
     state_->registry.NoteBufferWrite(id, epoch);
     return true;
 }
