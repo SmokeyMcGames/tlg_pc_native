@@ -8,6 +8,7 @@
 #include "tlg_native_vk_resources.h"
 #include "tlg_native_texture_layout.h"
 #include "tlg_native_rgba8_detile.h"
+#include "tlg_native_rgba8_macro_detile.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -121,6 +122,15 @@ public:
         std::uint32_t tiled_pitch, std::uint32_t tiled_height,
         Rgba8Tiling tile_mode, const void* source,
         std::uint64_t source_available_bytes);
+    // Verified single-sample 2D thin macro-tiled RGBA8 only, GCN
+    // P8_32x32_16x16 / 16 bank / non-alt layout. The caller must supply the
+    // original bank swizzle from trusted Js image metadata. Does not detile
+    // compressed, swizzled-bank variants, MSAA, depth or multiple mips.
+    bool CreateSampledTexture2DMacroRgba8(
+        std::uint64_t guest_id, std::uint32_t width, std::uint32_t height,
+        std::uint32_t tiled_pitch, std::uint32_t tiled_height,
+        std::uint32_t bank_swizzle, Rgba8MacroTiling tile_mode,
+        const void* source, std::uint64_t source_available_bytes);
     bool RecordSampledTextureUpload(std::uint64_t guest_id,
                                     Vulkan::Scheduler& scheduler);
     void RetireSampledTexture(std::uint64_t guest_id);
