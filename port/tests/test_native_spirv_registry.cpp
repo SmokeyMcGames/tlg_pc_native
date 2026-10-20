@@ -86,7 +86,7 @@ int main() {
     std::vector<NativeDescriptorBinding> linked;
     assert(AssembleCachedGraphicsDescriptors(*native_vs,*native_fs,linked));
     assert(linked.size()==3 && linked.back().binding==2);
-    const std::size_t layout_occupancy = spirv.size_bytes()*2 +
+    const std::size_t layout_occupancy = spirv.size()*sizeof(std::uint32_t)*2 +
         (vs_descriptors.size()+fs_descriptors.size())*
             sizeof(NativeDescriptorBinding);
     assert(layout_cache.ResidentBytes()==layout_occupancy);
@@ -100,7 +100,7 @@ int main() {
     assert(linked.empty());
     layout_cache.Retire(fs_key.guest_id);
     assert(native_fs->descriptors==fs_descriptors); // immutable old lifetime
-    assert(layout_cache.ResidentBytes()==spirv.size_bytes() +
+    assert(layout_cache.ResidentBytes()==spirv.size()*sizeof(std::uint32_t) +
         vs_descriptors.size()*sizeof(NativeDescriptorBinding));
 
     auto invalid=Key(0x345);
