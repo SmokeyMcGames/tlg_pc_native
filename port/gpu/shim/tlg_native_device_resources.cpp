@@ -53,6 +53,9 @@ struct DeviceResources::State {
     };
     std::mutex mutex;
     std::unordered_map<std::uint64_t, std::unique_ptr<GraphicsPipeline>> pipelines;
+    std::unordered_map<std::uint64_t, std::unique_ptr<GraphicsPipeline>> compute_pipelines;
+    // Both types own a VkPipeline and a VkPipelineLayout, and can share
+    // the same GPU-idle retirement queue without unsafe cross-stage reuse.
     std::vector<std::unique_ptr<GraphicsPipeline>> pipelines_retired;
     std::unordered_map<std::uint64_t, Buffer> active;
     std::vector<Buffer> retired;
@@ -92,11 +95,115 @@ DeviceResources::~DeviceResources() {
         pipeline.reset();
     }
     state_->pipelines.clear();
+    for (auto& [id, pipeline] : state_->compute_pipelines) {
+        state_->registry.UnregisterPipeline(id);
+        pipeline.reset();
+    }
+    state_->compute_pipelines.clear();
     for (auto& [id, target] : state_->color_active) {
         state_->registry.UnregisterTargetSet(id);
         state_->Destroy(*target);
     }
     state_->color_active.clear();
+}
+
+bool DeviceResources::CreateComputePipeline(
+    std::uint64_t guest, std::span<const std::uint32_t> spirv) {
+    if (!guest || spirv.size() < 5 || spirv.size() > (1u << 20) ||
+        spirv[0] != 0x07230203u)
+        return false;
+    const auto device = state_->instance.GetDevice();
+    const vk::ShaderModuleCreateInfo module_ci{
+        .codeSize = spirv.size_bytes(), .pCode = spirv.data(),
+    };
+    auto [module_result, module] = device.createShaderModuleUnique(module_ci);
+    if (module_result != vk::Result::eSuccess)
+        return false;
+    auto resource = std::make_unique<State::GraphicsPipeline>();
+    // GCN-generated compute code uses the canonical stage user-data push
+    // structure. A high-level Js compute dispatch must provide *verified*
+    // values before recording a native Vulkan dispatch.
+    const vk::PushConstantRange push_constant{
+        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .offset = 0,
+        .size = sizeof(Shader::PushData),
+    };
+    const vk::PipelineLayoutCreateInfo layout_ci{
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &push_constant,
+    };
+    auto [layout_result, layout] = device.createPipelineLayoutUnique(layout_ci);
+    if (layout_result != vk::Result::eSuccess)
+        return false;
+    resource->layout = std::move(layout);
+    const vk::PipelineShaderStageCreateInfo stage{
+        .stage = vk::ShaderStageFlagBits::eCompute,
+        .module = *module,
+        .pName = "main",
+    };
+    const vk::ComputePipelineCreateInfo pipeline_ci{
+        .stage = stage,
+        .layout = *resource->layout,
+    };
+    auto [result, pipeline] = device.createComputePipelineUnique({}, pipeline_ci);
+    if (result != vk::Result::eSuccess)
+        return false;
+    resource->pipeline = std::move(pipeline);
+    const std::uint64_t handle = Identity(static_cast<VkPipeline>(*resource->pipeline));
+    std::scoped_lock lock{state_->mutex};
+    if (!state_->registry.RegisterComputePipeline(guest, handle))
+        return false;
+    if (auto it = state_->compute_pipelines.find(guest);
+        it != state_->compute_pipelines.end()) {
+        state_->pipelines_retired.push_back(std::move(it->second));
+        it->second = std::move(resource);
+    } else {
+        state_->compute_pipelines.emplace(guest, std::move(resource));
+    }
+    return true;
+}
+
+bool DeviceResources::CreateResourceFreeComputePipelineFromGCN(
+    std::uint64_t guest, const GcnShaderInput& compute,
+    const Shader::RuntimeInfo& runtime, const Shader::Profile& profile) {
+    if (compute.hw_stage != Shader::HwStage::Compute ||
+        compute.sw_stage != Shader::SwStage::Compute)
+        return false;
+    auto translated = TranslateVerifiedGcn(compute, runtime, profile);
+    if (translated.status != ShaderTranslationStatus::Success)
+        return false;
+    return CreateComputePipeline(guest, translated.spirv);
+}
+
+bool DeviceResources::CreateComputePipelineFromCachedSpirv(
+    std::uint64_t guest, const NativeShaderRegistry& cache,
+    const NativeShaderKey& key) {
+    if (key.stage != NativeShaderStage::Compute)
+        return false;
+    const auto shader = cache.Find(key);
+    if (!shader)
+        return false;
+    return CreateComputePipeline(guest, shader->spirv);
+}
+
+void DeviceResources::RetireComputePipeline(std::uint64_t guest) {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->compute_pipelines.find(guest);
+    if (it == state_->compute_pipelines.end())
+        return;
+    state_->registry.UnregisterPipeline(guest);
+    state_->pipelines_retired.push_back(std::move(it->second));
+    state_->compute_pipelines.erase(it);
+}
+
+bool DeviceResources::QueryComputePipeline(
+    std::uint64_t guest, std::uint64_t& handle) const {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->compute_pipelines.find(guest);
+    if (it == state_->compute_pipelines.end() || !it->second->pipeline)
+        return false;
+    handle = Identity(static_cast<VkPipeline>(*it->second->pipeline));
+    return true;
 }
 
 bool DeviceResources::CreateGraphicsPipelineFromCachedSpirv(
