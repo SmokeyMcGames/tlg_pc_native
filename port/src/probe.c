@@ -48,7 +48,19 @@ static IsaTable *isa_table; /* rewritten sites (--isa-rewrite); the fault handle
 #ifndef _WIN32
 static uintptr_t guest_code_end; /* end of the image and its stub areas (emulation, red zone); TLG_CLOBBER_RED_ZONE */
 #endif
-static void isa_report_hook(void) { isa_rewrite_report(isa_table, stdout); }
+/* Both the ISA site report and the high-level renderer-hook report use the same
+ * exit diagnostics callback. Never replace one report with the other.
+ */
+extern volatile uint64_t tlg_js_trace_indexed_calls;
+extern volatile uintptr_t tlg_js_trace_last_context;
+static int tlg_js_trace_enabled;
+static void isa_report_hook(void) {
+    if (isa_table) isa_rewrite_report(isa_table, stdout);
+    if (tlg_js_trace_enabled)
+        printf("Js native bridge: v01.00 DrawIndexedCommon calls=%llu, last-context=%p\n",
+               (unsigned long long)__atomic_load_n(&tlg_js_trace_indexed_calls, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_last_context, __ATOMIC_RELAXED));
+}
 int vulkan_smoke(void);
 
 static void fail(const char *message) { fprintf(stderr, "ERROR: %s\n", message); exit(1); }
@@ -758,6 +770,8 @@ static void install_js_native_trace(const char *app0, Segment *segments,
     tlg_js_indexed_gateway = (uintptr_t)trampoline;
     __atomic_thread_fence(__ATOMIC_RELEASE);
     tlg_js_write_absolute_jump(image + at, (uintptr_t)tlg_js_indexed_entry);
+    tlg_js_trace_enabled = 1;
+    runtime_set_report_hook(isa_report_hook);
     printf("Js native bridge: v01.00 DrawIndexedCommon interception active at guest+0x%llx "
            "(read-only, original code replayed)\n", (unsigned long long)at);
 }
