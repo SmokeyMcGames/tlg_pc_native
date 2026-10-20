@@ -21,17 +21,30 @@
  */
 #define TLG_JS_100_INDEXED_ENTRY UINT64_C(0x1319760)
 #define TLG_JS_PROLOGUE_BYTES 14
+#define TLG_JS_FINGERPRINT_BYTES 31
 #define TLG_JS_TRAMPOLINE_BYTES (TLG_JS_PROLOGUE_BYTES + 14)
 static const uint8_t tlg_js_100_indexed_original[TLG_JS_PROLOGUE_BYTES] = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
     0x41, 0x55, 0x41, 0x54, 0x53, 0x50,
 };
 
+/* Verify the actual DrawIndexedCommon body, not only a generic push/pop
+ * prologue. Includes mov r13d,[rcx+0x84], mov r14,rsi, mov r15,rdi,
+ * mov ebx,[r14+0x64], observed in the provided v01.00 executable.
+ */
+static const uint8_t tlg_js_100_indexed_fingerprint[TLG_JS_FINGERPRINT_BYTES] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+    0x41, 0x55, 0x41, 0x54, 0x53, 0x50,
+    0x44, 0x8b, 0xa9, 0x84, 0x00, 0x00, 0x00,
+    0x49, 0x89, 0xf6, 0x49, 0x89, 0xff,
+    0x41, 0x8b, 0x5e, 0x64,
+};
+
 /* End-to-end source version and byte guards. We never scan blindly for code. */
 static inline int tlg_js_100_signature_match(const uint8_t *image, size_t image_size) {
     const uint64_t at = TLG_JS_100_INDEXED_ENTRY;
-    return image && image_size >= at + TLG_JS_PROLOGUE_BYTES &&
-           memcmp(image + at, tlg_js_100_indexed_original, TLG_JS_PROLOGUE_BYTES) == 0;
+    return image && image_size >= at + TLG_JS_FINGERPRINT_BYTES &&
+           memcmp(image + at, tlg_js_100_indexed_fingerprint, TLG_JS_FINGERPRINT_BYTES) == 0;
 }
 
 /* x86-64: jmp qword ptr [rip+0], followed by the absolute destination.
