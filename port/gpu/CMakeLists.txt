@@ -496,3 +496,7 @@ target_compile_options(native-js-to-vk-test PRIVATE -UNDEBUG -Wall -Wextra -Werr
 add_executable(native-vk-draw-test EXCLUDE_FROM_ALL ../tests/test_native_vk_draw.cpp)
 target_compile_features(native-vk-draw-test PRIVATE cxx_std_23)
 target_compile_options(native-vk-draw-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+add_executable(native-vk-resources-test EXCLUDE_FROM_ALL ../tests/test_native_vk_resources.cpp)
+target_compile_features(native-vk-resources-test PRIVATE cxx_std_23)
+target_compile_options(native-vk-resources-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
