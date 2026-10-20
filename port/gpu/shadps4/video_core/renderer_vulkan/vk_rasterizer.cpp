@@ -1502,7 +1502,10 @@ void Rasterizer::OnSubmit() {
     // independent offscreen Vulkan target, with NO PS4 GPU command translation.
     // It never replaces a game render target or touches the swapchain.
     if (native_triangle_smoke && !native_triangle_emitted) {
-        native_triangle_emitted = native_triangle_smoke->RecordOnce();
+        // One attempt per process, including a failed pixel comparison.
+        // Repeated retries can disturb guest GPU scheduling after a device error.
+        native_triangle_emitted = true;
+        (void)native_triangle_smoke->RecordOnce();
     }
     if (fault_process_pending) {
         fault_process_pending = false;
