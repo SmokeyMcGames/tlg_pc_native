@@ -7,6 +7,8 @@
 namespace TlgNativeJs {
 struct Stats {
     std::uint64_t nonindexed{};
+    std::uint64_t prepare_draws{};
+    std::uint64_t shader_slot_4678{}, shader_slot_4680{}, shader_slot_4688{};
     std::uint64_t indexed{};
     std::uint64_t indexed_instanced{};
     std::uint64_t buffer_creates{};
