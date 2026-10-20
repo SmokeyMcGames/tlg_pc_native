@@ -14,30 +14,30 @@
 
 /* .text virtual address relative to the eboot image, NOT a file offset.
  * Evidence: v01.00 DrawIndexedCommon assertion at guest+0x131990d,
- * inside the function whose entry is guest+0x1319760.
- * x86-64 disassembly at 0x1319760:
- * push rbp; mov rbp,rsp; push r15; push r14; push r13; push r12; push rbx; push rax.
+ * inside the function whose entry is guest+0x13198b0.
+ * x86-64 disassembly at 0x13198b0:
+ * push rbp; mov rbp,rsp; push r15; push r14; push r12; push rbx; mov rbx,rdi.
  * These fourteen bytes have no PC-relative instructions and are safe to replay.
  */
-#define TLG_JS_100_INDEXED_ENTRY UINT64_C(0x1319760)
+#define TLG_JS_100_INDEXED_ENTRY UINT64_C(0x13198b0)
 #define TLG_JS_PROLOGUE_BYTES 14
 #define TLG_JS_FINGERPRINT_BYTES 31
 #define TLG_JS_TRAMPOLINE_BYTES (TLG_JS_PROLOGUE_BYTES + 14)
 static const uint8_t tlg_js_100_indexed_original[TLG_JS_PROLOGUE_BYTES] = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
-    0x41, 0x55, 0x41, 0x54, 0x53, 0x50,
+    0x41, 0x54, 0x53, 0x48, 0x89, 0xfb,
 };
 
 /* Verify the actual DrawIndexedCommon body, not only a generic push/pop
- * prologue. Includes mov r13d,[rcx+0x84], mov r14,rsi, mov r15,rdi,
- * mov ebx,[r14+0x64], observed in the provided v01.00 executable.
+ * prologue. Includes mov r15d,edx; mov r14d,esi; cmp [rbx+0x4724],1
+ * and the following branch, observed in the provided v01.00 executable.
  */
 static const uint8_t tlg_js_100_indexed_fingerprint[TLG_JS_FINGERPRINT_BYTES] = {
     0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
-    0x41, 0x55, 0x41, 0x54, 0x53, 0x50,
-    0x44, 0x8b, 0xa9, 0x84, 0x00, 0x00, 0x00,
-    0x49, 0x89, 0xf6, 0x49, 0x89, 0xff,
-    0x41, 0x8b, 0x5e, 0x64,
+    0x41, 0x54, 0x53, 0x48, 0x89, 0xfb,
+    0x41, 0x89, 0xd7, 0x41, 0x89, 0xf6,
+    0x83, 0xbb, 0x24, 0x47, 0x00, 0x00, 0x01,
+    0x74, 0x0a, 0xc7, 0x83,
 };
 
 /* End-to-end source version and byte guards. We never scan blindly for code. */
