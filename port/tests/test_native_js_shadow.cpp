@@ -27,7 +27,7 @@ extern "C" int supply(void *userdata, TlgJsNativeDrawCandidate *out,
 }
 struct EventFixture {
     unsigned next = 0;
-    TlgJsNativeCommand commands[3] = {
+    TlgJsNativeCommand commands[4] = {
         {.ready=1, .kind=TLG_JS_NATIVE_CREATE_BUFFER,
          .context=0x111, .arg0=0x222, .arg1=0x333, .arg2=0x444,
          .arg3=(std::uint64_t{2} << 32) | 4096,
@@ -35,14 +35,17 @@ struct EventFixture {
         {.ready=2, .kind=TLG_JS_NATIVE_INDEXED,
          .context=0x555, .arg0=36, .arg1=8, .arg2=4},
         {.ready=3, .kind=TLG_JS_NATIVE_INSTANCED,
-         .context=0x555, .arg0=18, .arg1=2, .arg2=3, .arg3=4}
+         .context=0x555, .arg0=18, .arg1=2, .arg2=3, .arg3=4},
+        {.ready=4, .kind=TLG_JS_NATIVE_CREATE_PIXEL_SHADER,
+         .context=0x900, .arg0=0x901, .arg1=0x902, .arg2=0x903,
+         .arg3=0x1122334455667788ull, .arg4=0x99aabbccddeeff00ull}
     };
 };
 extern "C" int supply_events(void *userdata, TlgJsNativeCommand *out,
                               std::uint64_t *dropped) {
     auto* f = static_cast<EventFixture*>(userdata);
     *dropped = 0;
-    if (f->next >= 3) return 0;
+    if (f->next >= 4) return 0;
     *out = f->commands[f->next++];
     return 1;
 }
@@ -72,13 +75,16 @@ int main() {
     assert(native.indexed == 1);
     assert(native.indexed_instanced == 1);
     assert(native.buffer_creates == 1);
+    assert(native.pixel_shader_creates == 1);
+    assert(native.last_shader_head == 0x1122334455667788ull);
+    assert(native.last_shader_tail == 0x99aabbccddeeff00ull);
     assert(native.last_buffer_description == 0x222);
     assert(native.last_buffer_bytes == 4096);
     assert(native.last_buffer_usage == 2);
     assert(native.last_buffer_bind_flags == 4);
     assert(native.last_buffer_cpu_access == 8);
     assert(native.invalid == 0);
-    assert(native.last_sequence == 3);
+    assert(native.last_sequence == 4);
     TlgNativeJs::ResetForTest();
     std::puts("GPU native Js semantic collector PASS");
     return 0;
