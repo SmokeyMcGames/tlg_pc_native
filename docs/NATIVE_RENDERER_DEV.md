@@ -42,7 +42,10 @@ Disassembly of the original v01.00 executable confirms:
 - `port/gpu/shim/tlg_native_device_resources.{h,cpp}` allocates real
   Vulkan index buffers and 2D color images/views with the port's existing
   `vk::Device` and Vulkan Memory Allocator. It uploads initial index data,
-  supports updates, and defers physical destruction until GPU work is idle.
+  supports copy-on-write updates (in-flight draws retain the old allocation),
+  and defers physical destruction until GPU work is idle. These updates copy
+  the entire old index buffer and are a correctness prototype, not an optimal
+  streaming strategy. All resource publication follows the same lock order.
 - A hidden opt-in `TLG_NATIVE_DEVICE_RESOURCES=1` initializes this
   independent resource owner alongside the existing renderer.
 - `TLG_NATIVE_GPU_SMOKE=1` additionally tries a 3-index Vulkan buffer and
