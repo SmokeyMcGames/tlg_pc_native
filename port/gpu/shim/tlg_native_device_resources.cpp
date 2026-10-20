@@ -39,6 +39,7 @@ struct DeviceResources::State {
         std::uint32_t index_width = 0;
     };
     struct GraphicsPipeline {
+        vk::UniqueDescriptorSetLayout descriptors{};
         vk::UniquePipelineLayout layout{};
         vk::UniquePipeline pipeline{};
     };
@@ -108,10 +109,45 @@ DeviceResources::~DeviceResources() {
 }
 
 bool DeviceResources::CreateComputePipeline(
-    std::uint64_t guest, std::span<const std::uint32_t> spirv) {
+    std::uint64_t guest, std::span<const std::uint32_t> spirv,
+    std::span<const NativeDescriptorBinding> resource_bindings) {
     if (!guest || spirv.size() < 5 || spirv.size() > (1u << 20) ||
         spirv[0] != 0x07230203u)
         return false;
+    // The native stage resolver must supply a complete, verified descriptor
+    // sequence. Never silently invent missing sampler/image bindings.
+    std::vector<vk::DescriptorSetLayoutBinding> vk_bindings;
+    std::uint32_t total_descriptors = 0;
+    vk_bindings.reserve(resource_bindings.size());
+    for (std::size_t i = 0; i < resource_bindings.size(); ++i) {
+        const auto& binding = resource_bindings[i];
+        if (binding.binding != i || binding.descriptor_count < 1 ||
+            binding.descriptor_count > 64)
+            return false;
+        vk::DescriptorType type{};
+        switch (binding.kind) {
+        case NativeDescriptorKind::StorageBuffer:
+            type = vk::DescriptorType::eStorageBuffer; break;
+        case NativeDescriptorKind::SampledImage:
+            type = vk::DescriptorType::eSampledImage; break;
+        case NativeDescriptorKind::StorageImage:
+            type = vk::DescriptorType::eStorageImage; break;
+        case NativeDescriptorKind::Sampler:
+            type = vk::DescriptorType::eSampler; break;
+        default:
+            return false;
+        }
+        if (binding.descriptor_count > state_->instance.MaxPushDescriptors() -
+                                           total_descriptors)
+            return false;
+        total_descriptors += binding.descriptor_count;
+        vk_bindings.push_back({
+            .binding = binding.binding,
+            .descriptorType = type,
+            .descriptorCount = binding.descriptor_count,
+            .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        });
+    }
     const auto device = state_->instance.GetDevice();
     const vk::ShaderModuleCreateInfo module_ci{
         .codeSize = spirv.size_bytes(), .pCode = spirv.data(),
@@ -128,7 +164,23 @@ bool DeviceResources::CreateComputePipeline(
         .offset = 0,
         .size = sizeof(Shader::PushData),
     };
+    vk::DescriptorSetLayout set_handle{};
+    if (!vk_bindings.empty()) {
+        const vk::DescriptorSetLayoutCreateInfo desc_ci{
+            .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
+            .bindingCount = static_cast<std::uint32_t>(vk_bindings.size()),
+            .pBindings = vk_bindings.data(),
+        };
+        auto [descriptor_result, descriptors] =
+            device.createDescriptorSetLayoutUnique(desc_ci);
+        if (descriptor_result != vk::Result::eSuccess)
+            return false;
+        resource->descriptors = std::move(descriptors);
+        set_handle = *resource->descriptors;
+    }
     const vk::PipelineLayoutCreateInfo layout_ci{
+        .setLayoutCount = set_handle ? 1u : 0u,
+        .pSetLayouts = set_handle ? &set_handle : nullptr,
         .pushConstantRangeCount = 1,
         .pPushConstantRanges = &push_constant,
     };
@@ -184,6 +236,16 @@ bool DeviceResources::CreateComputePipelineFromCachedSpirv(
     if (!shader)
         return false;
     return CreateComputePipeline(guest, shader->spirv);
+}
+
+bool DeviceResources::QueryComputePipelineLayout(
+    std::uint64_t guest, std::uint64_t& handle) const {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->compute_pipelines.find(guest);
+    if (it == state_->compute_pipelines.end() || !it->second->layout)
+        return false;
+    handle = Identity(static_cast<VkPipelineLayout>(*it->second->layout));
+    return true;
 }
 
 void DeviceResources::RetireComputePipeline(std::uint64_t guest) {
