@@ -32,6 +32,7 @@ struct TriangleSmoke::State {
     ResourceRegistry& registry;
     bool textured = false;
     bool tiled = false; // exercises verified PS4 1D thin detile before Vulkan upload
+    bool macro = false; // exercises verified 2D macro tile bank/pipe permutation
     vk::ImageView color_view{};
     VkImage color_image = VK_NULL_HANDLE;
     VkBuffer readback_buffer = VK_NULL_HANDLE;
@@ -45,10 +46,11 @@ struct TriangleSmoke::State {
 TriangleSmoke::TriangleSmoke(const Vulkan::Instance& instance,
                               Vulkan::Scheduler& scheduler, DeviceResources& resources,
                               ResourceRegistry& registry, bool texture_test,
-                              bool tiled_texture_test)
+                              bool tiled_texture_test, bool macro_texture_test)
     : state_{std::make_unique<State>(
           instance, scheduler, resources, registry,
-          texture_test || tiled_texture_test, tiled_texture_test)} {}
+          texture_test || tiled_texture_test || macro_texture_test,
+          tiled_texture_test && !macro_texture_test, macro_texture_test)} {
 TriangleSmoke::~TriangleSmoke() {
     if (!state_->target_created) return;
     // A deferred Scheduler::Record() closure may not have reached the GPU yet.
@@ -123,7 +125,33 @@ bool TriangleSmoke::Init() {
     // permutation, then independently binds the resulting VkImageView.
     if (state_->textured) {
         bool uploaded = false;
-        if (state_->tiled) {
+        if (state_->macro) {
+            // A synthetic 128x64 pixel PS4 macro tile with independently
+            // varied R/G channels, bank swizzle 7. All 8192 32-bit pixels
+            // are explicitly laid out using the same address constraints
+            // that the detiler validates before Vulkan upload.
+            constexpr std::uint32_t pitch = 128, height = 64, swizzle = 7;
+            std::array<std::uint8_t, pitch * height * 4u> macro_pixels{};
+            MacroRgba8Layout macro_layout{};
+            const bool valid = Validate2DMacroRgba8(
+                pitch, height, pitch, height, swizzle, macro_pixels.size(),
+                macro_pixels.data(), Rgba8MacroTiling::Thin2DThin, macro_layout);
+            if (!valid)
+                return false;
+            for (std::uint32_t y = 0; y < height; ++y) {
+                for (std::uint32_t x = 0; x < pitch; ++x) {
+                    const auto offset = MacroPixelByteOffsetRgba8(x, y, macro_layout);
+                    macro_pixels[offset] = static_cast<std::uint8_t>(x * 3u);
+                    macro_pixels[offset + 1] = static_cast<std::uint8_t>(y * 5u);
+                    macro_pixels[offset + 2] = 96;
+                    macro_pixels[offset + 3] = 255;
+                }
+            }
+            uploaded = state_->resources.CreateSampledTexture2DMacroRgba8(
+                SmokeTextureId, pitch, height, pitch, height, swizzle,
+                Rgba8MacroTiling::Thin2DThin,
+                macro_pixels.data(), macro_pixels.size());
+        } else if (state_->tiled) {
             std::array<std::uint8_t, 8u * 8u * 4u> tiled_pixels{};
             for (std::uint32_t y = 0; y < 8; ++y) {
                 for (std::uint32_t x = 0; x < 8; ++x) {
@@ -377,9 +405,12 @@ bool TriangleSmoke::RecordOnce() {
     const std::uint8_t b = rgba[middle + 2], a = rgba[middle + 3];
     // fs_tri.vert supplies UV ~0.5 at the center; native_triangle.frag
     // outputs (uv.x, uv.y, 0.25, 1). Tolerance allows rasterization rounding.
-    const bool pass = state_->tiled
-        ? (r >= 80 && r <= 140 && g >= 80 && g <= 140 &&
-           b >= 70 && b <= 135 && a >= 250)
+    const bool pass = state_->macro
+        ? (r >= 180 && r <= 205 && g >= 145 && g <= 175 &&
+           b >= 90 && b <= 105 && a >= 250)
+        : state_->tiled
+            ? (r >= 80 && r <= 140 && g >= 80 && g <= 140 &&
+               b >= 70 && b <= 135 && a >= 250)
         : state_->textured
             ? (r >= 10 && r <= 22 && g >= 58 && g <= 70 &&
                b >= 122 && b <= 134 && a >= 250)
@@ -387,11 +418,13 @@ bool TriangleSmoke::RecordOnce() {
                b >= 50 && b <= 85 && a >= 250);
     std::printf("Native Vulkan %s triangle GPU readback: %s "
                 "(center RGBA %u,%u,%u,%u; expected %s)\n",
-                state_->tiled ? "1D-tiled sampled-texture"
+                state_->macro ? "2D-macro sampled-texture"
+                    : state_->tiled ? "1D-tiled sampled-texture"
                     : state_->textured ? "sampled-texture" : "registry-indexed",
                 pass ? "PASS" : "FAIL", unsigned(r), unsigned(g),
                 unsigned(b), unsigned(a),
-                state_->tiled ? "center ~109,109,98,255"
+                state_->macro ? "center ~192,160,96,255"
+                    : state_->tiled ? "center ~109,109,98,255"
                     : state_->textured ? "16,64,128,255" : "128,128,64,255");
     return pass;
 }
