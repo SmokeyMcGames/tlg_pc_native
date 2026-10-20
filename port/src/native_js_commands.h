@@ -25,7 +25,8 @@ enum {
     TLG_JS_NATIVE_CREATE_BUFFER = 3,
     TLG_JS_NATIVE_CREATE_PIXEL_SHADER = 4,
     TLG_JS_NATIVE_DRAW = 5,
-    TLG_JS_NATIVE_PREPARE_DRAW = 6
+    TLG_JS_NATIVE_PREPARE_DRAW = 6,
+    TLG_JS_NATIVE_CREATE_SRV = 7
 };
 
 /* Full 64-bit register values; never dereference game pointers in a capture hook. */
@@ -156,6 +157,31 @@ static inline int tlg_js_native_decode_buffer_create(
     out->usage = (uint32_t)(record->arg3 >> 32);
     out->bind_flags = (uint32_t)record->arg4;
     out->cpu_access_flags = (uint32_t)(record->arg4 >> 32);
+    return 1;
+}
+
+/* The v01.00 JsDevice::CreateShaderResourceView API is intercepted at
+ * entry, before constructing its guest view object. All inputs are opaque.
+ * Resource/output lifetimes and view description have NOT been verified:
+ * this event is only a possible precursor to native image-view binding.
+ */
+typedef struct TlgJsNativeSrvCreateCandidate {
+    uint64_t sequence;
+    uint64_t device;
+    uint64_t input_rsi, input_rdx, input_rcx, input_r8, input_r9;
+} TlgJsNativeSrvCreateCandidate;
+
+static inline int tlg_js_native_decode_srv_create(
+    const TlgJsNativeCommand* event, TlgJsNativeSrvCreateCandidate* out) {
+    if (!event || !out || !event->context ||
+        event->kind != TLG_JS_NATIVE_CREATE_SRV) return 0;
+    out->sequence = event->ready;
+    out->device = event->context;
+    out->input_rsi = event->arg0;
+    out->input_rdx = event->arg1;
+    out->input_rcx = event->arg2;
+    out->input_r8 = event->arg3;
+    out->input_r9 = event->arg4;
     return 1;
 }
 
