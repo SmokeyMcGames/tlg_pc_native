@@ -549,3 +549,9 @@ add_executable(native-rgba8-detile-test EXCLUDE_FROM_ALL
     ../tests/test_native_rgba8_detile.cpp)
 target_compile_features(native-rgba8-detile-test PRIVATE cxx_std_23)
 target_compile_options(native-rgba8-detile-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Reference-derived GCN 2D thin macrotiling, no Vulkan driver required.
+add_executable(native-rgba8-macro-detile-test EXCLUDE_FROM_ALL
+    ../tests/test_native_rgba8_macro_detile.cpp)
+target_compile_features(native-rgba8-macro-detile-test PRIVATE cxx_std_23)
+target_compile_options(native-rgba8-macro-detile-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
