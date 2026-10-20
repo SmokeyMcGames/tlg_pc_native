@@ -53,6 +53,9 @@ static uintptr_t guest_code_end; /* end of the image and its stub areas (emulati
  */
 extern volatile uint64_t tlg_js_trace_indexed_calls;
 extern volatile uintptr_t tlg_js_trace_last_context;
+extern volatile uintptr_t tlg_js_trace_last_arg1;
+extern volatile uintptr_t tlg_js_trace_last_arg2;
+extern volatile uintptr_t tlg_js_trace_last_arg3;
 static int tlg_js_trace_enabled;
 /* The existing freeze-monitor thread polls this without touching guest memory.
  * Reports every 5s so the high-level interception can be verified in live gameplay.
@@ -63,8 +66,13 @@ void tlg_js_trace_report_tick(uint64_t now_ms) {
     if (last_ms && now_ms - last_ms < 5000) return;
     const uint64_t calls = __atomic_load_n(&tlg_js_trace_indexed_calls, __ATOMIC_RELAXED);
     if (last_ms)
-        printf("Js native bridge: DrawIndexedCommon calls +%llu / 5s, total %llu\n",
-               (unsigned long long)(calls - last_count), (unsigned long long)calls);
+        printf("Js native bridge: DrawIndexedCommon +%llu / 5s, total %llu; "
+               "raw ctx=%p rsi=%p rdx=%p rcx=%p\n",
+               (unsigned long long)(calls - last_count), (unsigned long long)calls,
+               (void *)__atomic_load_n(&tlg_js_trace_last_context, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_last_arg1, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_last_arg2, __ATOMIC_RELAXED),
+               (void *)__atomic_load_n(&tlg_js_trace_last_arg3, __ATOMIC_RELAXED));
     last_ms = now_ms;
     last_count = calls;
 }
@@ -738,6 +746,9 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
 __attribute__((used)) uintptr_t tlg_js_indexed_gateway;
 __attribute__((used)) volatile uint64_t tlg_js_trace_indexed_calls;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_context;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg1;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg2;
+__attribute__((used)) volatile uintptr_t tlg_js_trace_last_arg3;
 
 /* No C call, stack change, or XMM clobbers on the guest's hot draw path. */
 __attribute__((naked, used, noinline))
@@ -746,6 +757,9 @@ static void tlg_js_indexed_entry(void) {
         "pushfq\n\t"
         "lock incq tlg_js_trace_indexed_calls(%rip)\n\t"
         "movq %rdi, tlg_js_trace_last_context(%rip)\n\t"
+        "movq %rsi, tlg_js_trace_last_arg1(%rip)\n\t"
+        "movq %rdx, tlg_js_trace_last_arg2(%rip)\n\t"
+        "movq %rcx, tlg_js_trace_last_arg3(%rip)\n\t"
         "popfq\n\t"
         "jmp *tlg_js_indexed_gateway(%rip)\n\t"
     );
