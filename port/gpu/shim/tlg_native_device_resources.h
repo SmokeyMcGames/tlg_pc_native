@@ -10,7 +10,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace Vulkan { class Instance; }
+namespace Vulkan { class Instance; class Scheduler; }
 
 namespace TlgNativeVk {
 class DeviceResources {
@@ -37,6 +37,14 @@ public:
     bool CreateColorTarget(std::uint64_t guest_id, std::uint32_t width,
                            std::uint32_t height, std::uint32_t vk_format);
     void RetireColorTarget(std::uint64_t guest_id);
+
+    // Record native Vulkan synchronization (same GPU scheduler/queue as the
+    // game's presentation path), independent of PS4 PM4 packet decoding.
+    // The caller may acknowledge resource readiness only AFTER all required
+    // barriers are recorded in the Vulkan submission order.
+    bool RecordIndexReadBarrier(std::uint64_t guest_id, Vulkan::Scheduler& scheduler);
+    bool RecordColorAttachmentTransition(std::uint64_t guest_id,
+                                         Vulkan::Scheduler& scheduler);
 
     // Physically destroy retired resources only after the Vulkan device is
     // idle. This method may block; do NOT call from a page-fault handler.
