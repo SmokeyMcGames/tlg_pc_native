@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "tlg_native_device_resources.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
+#include "video_core/renderer_vulkan/vk_scheduler.h"
 #include <vk_mem_alloc.h>
 #include <algorithm>
 #include <cstring>
@@ -40,6 +41,7 @@ struct DeviceResources::State {
         std::uint32_t width = 0;
         std::uint32_t height = 0;
         std::uint32_t format = 0;
+        vk::ImageLayout layout = vk::ImageLayout::eUndefined;
     };
     std::mutex mutex;
     std::unordered_map<std::uint64_t, Buffer> active;
@@ -226,6 +228,83 @@ bool DeviceResources::CreateColorTarget(std::uint64_t guest,
     }
     // The image starts UNDEFINED. No Vk render can use it until the GPU side
     // records a real layout transition and acknowledges that barrier.
+    return true;
+}
+
+bool DeviceResources::RecordIndexReadBarrier(std::uint64_t guest,
+                                             Vulkan::Scheduler& scheduler) {
+    VkBuffer handle = VK_NULL_HANDLE;
+    std::uint64_t byte_size = 0;
+    {
+        std::scoped_lock lock{state_->mutex};
+        auto it = state_->active.find(guest);
+        if (it == state_->active.end()) return false;
+        handle = it->second.gpu;
+        byte_size = it->second.index_count * it->second.index_width;
+    }
+    const vk::BufferMemoryBarrier2 barrier{
+        .srcStageMask = vk::PipelineStageFlagBits2::eHost,
+        .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eIndexInput,
+        .dstAccessMask = vk::AccessFlagBits2::eIndexRead,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = vk::Buffer{handle},
+        .offset = 0,
+        .size = byte_size,
+    };
+    // DependencyInfo must be created INSIDE the deferred closure because
+    // its pBufferMemoryBarriers pointer would otherwise dangle.
+    scheduler.Record([barrier](vk::CommandBuffer cmd) {
+        const vk::DependencyInfo dependencies{
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &barrier,
+        };
+        cmd.pipelineBarrier2(dependencies);
+    });
+    return true;
+}
+
+bool DeviceResources::RecordColorAttachmentTransition(std::uint64_t guest,
+                                                        Vulkan::Scheduler& scheduler) {
+    vk::ImageMemoryBarrier2 barrier{};
+    {
+        std::scoped_lock lock{state_->mutex};
+        auto it = state_->color_active.find(guest);
+        if (it == state_->color_active.end()) return false;
+        auto& image = *it->second;
+        if (image.layout == vk::ImageLayout::eColorAttachmentOptimal)
+            return true;
+        if (image.layout != vk::ImageLayout::eUndefined)
+            return false; // unknown transition path; reject rather than guess
+        barrier = {
+            .srcStageMask = vk::PipelineStageFlagBits2::eTopOfPipe,
+            .srcAccessMask = vk::AccessFlags2{},
+            .dstStageMask = vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+            .dstAccessMask = vk::AccessFlagBits2::eColorAttachmentRead |
+                             vk::AccessFlagBits2::eColorAttachmentWrite,
+            .oldLayout = vk::ImageLayout::eUndefined,
+            .newLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = vk::Image{image.gpu},
+            .subresourceRange = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1,
+            },
+        };
+        image.layout = vk::ImageLayout::eColorAttachmentOptimal;
+    }
+    scheduler.Record([barrier](vk::CommandBuffer cmd) {
+        const vk::DependencyInfo dependencies{
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &barrier,
+        };
+        cmd.pipelineBarrier2(dependencies);
+    });
     return true;
 }
 
