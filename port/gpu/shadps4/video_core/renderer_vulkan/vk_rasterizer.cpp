@@ -1586,7 +1586,7 @@ bool Rasterizer::BindResources(const Pipeline* pipeline) {
     // and the existing per-dispatch correctness checks still execute on hits.
     static const bool native_recipes = [] {
         const char* env = std::getenv("TLG_NATIVE_COMPUTE_RECIPES");
-        return env && env[0] == '1' && env[1] == '\\0';
+        return env && env[0] == '1' && env[1] == '\0';
     }();
     if (native_recipes) {
         if (pipeline->IsCompute()) {
