@@ -15,6 +15,9 @@ struct Stats {
     std::uint64_t indexed_instanced{};
     std::uint64_t buffer_creates{};
     std::uint64_t pixel_shader_creates{};
+    std::uint64_t srv_creates{};
+    std::uint64_t last_srv_resource{};
+    std::uint64_t last_srv_descriptor{};
     std::uint64_t last_shader_head{};
     std::uint64_t last_shader_tail{};
     std::uint64_t last_buffer_description{};
