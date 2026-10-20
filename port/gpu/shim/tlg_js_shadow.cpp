@@ -33,27 +33,39 @@ void PumpOnGpuSubmission() {
     constexpr unsigned MaxPerSubmission = 8192;
     unsigned processed = 0;
     std::uint64_t discarded = 0;
+    std::uint64_t indexed = 0, instanced = 0, invalid = 0, drops = 0;
+    std::uint64_t last_context = 0, last_sequence = 0;
     TlgJsNativeDrawCandidate cmd{};
     for (; processed < MaxPerSubmission; ++processed) {
         discarded = 0;
         if (!pop(user, &cmd, &discarded)) {
-            if (discarded) g_dropped.fetch_add(discarded, std::memory_order_relaxed);
+            drops += discarded;
             break;
         }
-        if (discarded) g_dropped.fetch_add(discarded, std::memory_order_relaxed);
+        drops += discarded;
         switch (cmd.kind) {
         case TLG_JS_NATIVE_INDEXED:
-            g_indexed.fetch_add(1, std::memory_order_relaxed);
+            ++indexed;
             break;
         case TLG_JS_NATIVE_INSTANCED:
-            g_instanced.fetch_add(1, std::memory_order_relaxed);
+            ++instanced;
             break;
         default:
-            g_invalid.fetch_add(1, std::memory_order_relaxed);
+            ++invalid;
             continue;
         }
-        g_last_context.store(cmd.context, std::memory_order_relaxed);
-        g_last_sequence.store(cmd.sequence, std::memory_order_relaxed);
+        last_context = cmd.context;
+        last_sequence = cmd.sequence;
+    }
+    // Keep the Vulkan command processor off the inter-core atomic hot path:
+    // one aggregation per submission instead of one atomic op per game draw.
+    if (indexed) g_indexed.fetch_add(indexed, std::memory_order_relaxed);
+    if (instanced) g_instanced.fetch_add(instanced, std::memory_order_relaxed);
+    if (invalid) g_invalid.fetch_add(invalid, std::memory_order_relaxed);
+    if (drops) g_dropped.fetch_add(drops, std::memory_order_relaxed);
+    if (last_sequence) {
+        g_last_context.store(last_context, std::memory_order_relaxed);
+        g_last_sequence.store(last_sequence, std::memory_order_relaxed);
     }
     g_batches.fetch_add(1, std::memory_order_relaxed);
     static auto last_report = std::chrono::steady_clock::now();
