@@ -38,7 +38,7 @@ def executable_bytes(path):
         raise ValueError('eboot must be a decrypted ELF or a supported plaintext SELF')
     if elf[4] != 2 or elf[5] != 1:
         raise ValueError('expected ELF64, little-endian')
-    _, _, _, _, phoff = struct.unpack_from('<16sHHIQ', elf, 0)
+    phoff = struct.unpack_from('<Q', elf, 32)[0]  # ELF64 e_phoff, not e_entry
     phentsize, phnum = struct.unpack_from('<HH', elf, 54)
     if phentsize < 56 or phnum < 1 or phnum > 64:
         raise ValueError('invalid ELF program-header table')
