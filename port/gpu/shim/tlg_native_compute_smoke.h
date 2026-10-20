@@ -9,9 +9,12 @@
 #include <memory>
 namespace Vulkan { class Instance; class Scheduler; }
 namespace TlgNativeVk {
+class DeviceResources;
+class ResourceRegistry;
 class ComputeSmoke {
 public:
-    ComputeSmoke(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler);
+    ComputeSmoke(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
+                 DeviceResources& resources, ResourceRegistry& registry);
     ~ComputeSmoke();
     ComputeSmoke(const ComputeSmoke&) = delete;
     ComputeSmoke& operator=(const ComputeSmoke&) = delete;
