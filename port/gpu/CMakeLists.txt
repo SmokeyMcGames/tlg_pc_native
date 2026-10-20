@@ -529,3 +529,9 @@ target_compile_options(native-js-draw-hook-test PRIVATE -UNDEBUG -Wall -Wextra -
 add_executable(native-js-prepare-draw-test EXCLUDE_FROM_ALL ../tests/test_native_js_prepare_draw.c)
 target_compile_features(native-js-prepare-draw-test PRIVATE c_std_11)
 target_compile_options(native-js-prepare-draw-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Pair verified high-level guest draws with their subsequent PrepareDraw state.
+add_executable(native-js-prepare-match-test EXCLUDE_FROM_ALL
+    ../tests/test_native_js_prepare_match.cpp)
+target_compile_features(native-js-prepare-match-test PRIVATE cxx_std_23)
+target_compile_options(native-js-prepare-match-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
