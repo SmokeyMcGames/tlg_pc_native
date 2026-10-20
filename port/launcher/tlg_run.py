@@ -91,6 +91,7 @@ DEFAULT_SETTINGS = {
     'frame_rate': '30',            # v1.00/v1.03, identified by executable and verified bytes
     'gpu_stability': True,         # recommended 2 workers, synchronous shader compile (#37)
     'native_draw_bridge': False,   # experimental Gnm -> Vulkan typed draw bridge (off by default)
+    'native_js_trace': False,      # read-only verified JsDeviceContext entry intercept (v1.00)
 }
 FRAME_RATES = ['30', '60', 'unlocked']
 
@@ -478,6 +479,8 @@ def build_env(settings, extra=None):
     if settings.get('gpu_stability', True):
         env.setdefault('TLG_PREP_WORKERS', '2')
         env.setdefault('TLG_ASYNC_SHADERS', '0')
+    if settings.get('native_js_trace', False):
+        env.setdefault('TLG_JS_NATIVE_TRACE', '1')
     if settings.get('native_draw_bridge', False):
         env.setdefault('TLG_NATIVE_DRAW_BRIDGE', '1')
         env.setdefault('TLG_NATIVE_COMPUTE_RECIPES', '1')
