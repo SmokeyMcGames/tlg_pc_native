@@ -21,6 +21,31 @@
  */
 #define TLG_JS_100_INDEXED_ENTRY UINT64_C(0x13198b0)
 #define TLG_JS_100_INSTANCED_ENTRY UINT64_C(0x1319a00)
+/* Verified v01.00 JsDevice::CreateBuffer, assertion string "CreateBuffer"
+ * referenced at guest+0x12ff33c and +0x12ff3c2. Entry is guest+0x12ff2f0.
+ * RDI=device, RSI=buffer description, RDX=initial data, RCX=result pointer.
+ * First 20 bytes are six full relocation-free prologue instructions.
+ */
+#define TLG_JS_100_CREATE_BUFFER_ENTRY UINT64_C(0x12ff2f0)
+#define TLG_JS_CREATE_BUFFER_PROLOGUE_BYTES 20
+#define TLG_JS_CREATE_BUFFER_FINGERPRINT_BYTES 48
+#define TLG_JS_CREATE_BUFFER_TRAMPOLINE_BYTES (TLG_JS_CREATE_BUFFER_PROLOGUE_BYTES + 14)
+static const uint8_t
+tlg_js_100_create_buffer_prologue[TLG_JS_CREATE_BUFFER_PROLOGUE_BYTES] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+    0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81, 0xec,
+    0x38, 0x02, 0x00, 0x00,
+};
+static const uint8_t
+tlg_js_100_create_buffer_fingerprint[TLG_JS_CREATE_BUFFER_FINGERPRINT_BYTES] = {
+    0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+    0x41,0x55,0x41,0x54,0x53,0x48,0x81,0xec,
+    0x38,0x02,0x00,0x00,0x48,0x8b,0x05,0xb5,
+    0x8d,0x3d,0x00,0x49,0x89,0xf5,0x49,0x89,
+    0xcf,0x49,0x89,0xfc,0x48,0x89,0x95,0xc8,
+    0xfd,0xff,0xff,0x4d,0x85,0xed,0x48,0x8b,
+};
+
 #define TLG_JS_PROLOGUE_BYTES 14
 #define TLG_JS_FINGERPRINT_BYTES 31
 #define TLG_JS_TRAMPOLINE_BYTES (TLG_JS_PROLOGUE_BYTES + 14)
@@ -70,6 +95,17 @@ static inline int tlg_js_100_instanced_signature_match(const uint8_t *image, siz
            memcmp(image + at, tlg_js_100_instanced_fingerprint, TLG_JS_FINGERPRINT_BYTES) == 0;
 }
 
+/* Only the exact v01.00 entry is eligible; v01.03 locations differ.
+ * Never attempt an unverified runtime instruction scan as a fallback.
+ */
+static inline int tlg_js_100_create_buffer_signature_match(
+    const uint8_t *image, size_t image_size) {
+    const uint64_t at = TLG_JS_100_CREATE_BUFFER_ENTRY;
+    return image && image_size >= at + TLG_JS_CREATE_BUFFER_FINGERPRINT_BYTES &&
+        memcmp(image + at, tlg_js_100_create_buffer_fingerprint,
+               TLG_JS_CREATE_BUFFER_FINGERPRINT_BYTES) == 0;
+}
+
 /* x86-64: jmp qword ptr [rip+0], followed by the absolute destination.
  * Rel32 jumps can be out of range on Windows with ASLR.
  * The caller validates the target before making executable memory writable.
@@ -93,4 +129,18 @@ static inline int tlg_js_build_trampoline(uint8_t *out, size_t capacity,
     tlg_js_write_absolute_jump(out + length, continuation);
     return TLG_JS_TRAMPOLINE_BYTES;
 }
+static inline int tlg_js_build_create_buffer_trampoline(
+    uint8_t *out, size_t capacity, const uint8_t *original,
+    size_t original_length, uintptr_t continuation) {
+    if (!out || !original ||
+        original_length != TLG_JS_CREATE_BUFFER_PROLOGUE_BYTES ||
+        capacity < TLG_JS_CREATE_BUFFER_TRAMPOLINE_BYTES ||
+        memcmp(original, tlg_js_100_create_buffer_prologue,
+               TLG_JS_CREATE_BUFFER_PROLOGUE_BYTES) != 0)
+        return 0;
+    memcpy(out, original, original_length);
+    tlg_js_write_absolute_jump(out + original_length, continuation);
+    return TLG_JS_CREATE_BUFFER_TRAMPOLINE_BYTES;
+}
+
 #endif
