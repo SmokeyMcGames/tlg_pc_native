@@ -21,6 +21,29 @@
  */
 #define TLG_JS_100_INDEXED_ENTRY UINT64_C(0x13198b0)
 #define TLG_JS_100_INSTANCED_ENTRY UINT64_C(0x1319a00)
+/* v01.00 JsDeviceContext::Draw at guest+0x1312480:
+ * RDI=context, ESI=vertex count, EDX=first vertex, original code calls
+ * sceGnmDrawIndexAuto. "Draw" diagnostics at guest+0x13124d0, +0x131258f.
+ * First 18 bytes are whole instructions, no RIP-relative addressing:
+ * push rbp; mov rbp,rsp; push r15; push r14; push r12; push rbx;
+ * sub rsp,0x220. The following mov r12,[rip+0x3c5c27] must stay in place.
+ */
+#define TLG_JS_100_DRAW_ENTRY UINT64_C(0x1312480)
+#define TLG_JS_DRAW_PROLOGUE_BYTES 18
+#define TLG_JS_DRAW_FINGERPRINT_BYTES 48
+#define TLG_JS_DRAW_TRAMPOLINE_BYTES (TLG_JS_DRAW_PROLOGUE_BYTES + 14)
+static const uint8_t tlg_js_100_draw_prologue[TLG_JS_DRAW_PROLOGUE_BYTES] = {
+    0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,0x41,0x54,0x53,0x48,
+    0x81,0xec,0x20,0x02,0x00,0x00,
+};
+static const uint8_t tlg_js_100_draw_fingerprint[TLG_JS_DRAW_FINGERPRINT_BYTES] = {
+    0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+    0x41,0x54,0x53,0x48,0x81,0xec,0x20,0x02,
+    0x00,0x00,0x4c,0x8b,0x25,0x27,0x5c,0x3c,
+    0x00,0x48,0x89,0xfb,0x41,0x89,0xd7,0x41,
+    0x89,0xf6,0x49,0x8b,0x04,0x24,0x48,0x89,
+    0x45,0xd8,0x48,0x8b,0x83,0x98,0x46,0x00,
+};
 /* Verified v01.00 JsDevice::CreateBuffer, assertion string "CreateBuffer"
  * referenced at guest+0x12ff33c and +0x12ff3c2. Entry is guest+0x12ff2f0.
  * RDI=device, RSI=buffer description, RDX=initial data, RCX=result pointer.
@@ -112,6 +135,14 @@ static const uint8_t tlg_js_100_instanced_fingerprint[TLG_JS_FINGERPRINT_BYTES] 
     0x44, 0x39, 0xb3, 0x24, 0x47,
 };
 
+static inline int tlg_js_100_draw_signature_match(const uint8_t *image,
+                                                     size_t image_size) {
+    const uint64_t at = TLG_JS_100_DRAW_ENTRY;
+    return image && image_size >= at + TLG_JS_DRAW_FINGERPRINT_BYTES &&
+           !memcmp(image + at, tlg_js_100_draw_fingerprint,
+                   TLG_JS_DRAW_FINGERPRINT_BYTES);
+}
+
 /* End-to-end source version and byte guards. We never scan blindly for code. */
 static inline int tlg_js_100_signature_match(const uint8_t *image, size_t image_size) {
     const uint64_t at = TLG_JS_100_INDEXED_ENTRY;
@@ -171,6 +202,17 @@ static inline int tlg_js_build_create_buffer_trampoline(
     memcpy(out, original, original_length);
     tlg_js_write_absolute_jump(out + original_length, continuation);
     return TLG_JS_CREATE_BUFFER_TRAMPOLINE_BYTES;
+}
+static inline int tlg_js_build_draw_trampoline(
+    uint8_t *out, size_t capacity, const uint8_t *original,
+    size_t len, uintptr_t continuation) {
+    if (!out || !original || len != TLG_JS_DRAW_PROLOGUE_BYTES ||
+        capacity < TLG_JS_DRAW_TRAMPOLINE_BYTES ||
+        memcmp(original, tlg_js_100_draw_prologue, len))
+        return 0;
+    memcpy(out, original, len);
+    tlg_js_write_absolute_jump(out + len, continuation);
+    return TLG_JS_DRAW_TRAMPOLINE_BYTES;
 }
 
 #endif
