@@ -74,9 +74,12 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     // guest JsDevice object lifecycle and GPU synchronization are validated.
     const char* native_resources = std::getenv("TLG_NATIVE_DEVICE_RESOURCES");
     const char* native_smoke = std::getenv("TLG_NATIVE_GPU_SMOKE");
+    const char* native_triangle = std::getenv("TLG_NATIVE_VULKAN_TRIANGLE");
     const bool smoke = native_smoke && native_smoke[0] == '1' && !native_smoke[1];
+    const bool triangle = native_triangle && native_triangle[0] == '1' && !native_triangle[1];
     if (!EmulatorSettings.IsNullGPU() &&
-        ((native_resources && native_resources[0] == '1' && !native_resources[1]) || smoke)) {
+        ((native_resources && native_resources[0] == '1' && !native_resources[1]) ||
+         smoke || triangle)) {
         native_device_resources =
             std::make_unique<TlgNativeVk::DeviceResources>(instance, native_resource_registry);
         if (smoke) {
@@ -95,6 +98,14 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
             if (allocated) native_device_resources->RetireIndexBuffer(SmokeResource);
             if (color) native_device_resources->RetireColorTarget(SmokeResource + 1);
             if (allocated || color) native_device_resources->CollectRetiredAfterIdle();
+        }
+        if (triangle) {
+            native_triangle_smoke = std::make_unique<TlgNativeVk::TriangleSmoke>(
+                instance, scheduler, *native_device_resources);
+            if (!native_triangle_smoke->Init()) {
+                std::puts("Native Vulkan offscreen triangle: pipeline/resource initialization FAILED");
+                native_triangle_smoke.reset();
+            }
         }
     }
 
@@ -1487,6 +1498,12 @@ void Rasterizer::OnSubmit() {
     // Shadow-only: this MUST NOT emit duplicate Vulkan draws while PM4 owns output.
     TlgNativeJs::PumpOnGpuSubmission();
     DrainDrawPipe();
+    // Explicit research smoke: record one native graphics pass directly into an
+    // independent offscreen Vulkan target, with NO PS4 GPU command translation.
+    // It never replaces a game render target or touches the swapchain.
+    if (native_triangle_smoke && !native_triangle_emitted) {
+        native_triangle_emitted = native_triangle_smoke->RecordOnce();
+    }
     if (fault_process_pending) {
         fault_process_pending = false;
         buffer_cache.ProcessFaultBuffer();
