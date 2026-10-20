@@ -3,6 +3,7 @@
 #ifndef TLGGPU_H
 #define TLGGPU_H
 #include <stdint.h>
+#include "../src/native_js_commands.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -14,6 +15,15 @@ typedef struct {
     uint32_t psf_attributes;    /* param.sfo ATTRIBUTE */
     int32_t width, height;      /* initial window size */
 } TlgGpuConfig;
+/* Optional native renderer transition: semantic high-level draw source.
+ * The guest hook publishes opaque snapshots; a GPU-side consumer drains them.
+ * THIS CALLBACK ONLY OBSERVES until native Js resource-state equivalence is proven.
+ * Never invoke the callback from a signal handler, shader compiler or guest thread.
+ */
+typedef int (*TlgGpuNativeJsPop)(void *user, TlgJsNativeDrawCandidate *record,
+                                 uint64_t *dropped_since_last);
+void tlggpu_set_native_js_draw_source(TlgGpuNativeJsPop pop, void *user);
+
 /* Registers kernel event queues (needed with or without graphics). */
 void tlggpu_register_kernel(void);
 /* Creates window, Vulkan device, presenter and GPU command processor. */
