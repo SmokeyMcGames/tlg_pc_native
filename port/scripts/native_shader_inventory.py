@@ -21,9 +21,12 @@ from tlg_patches import (
 SELF_MAGIC = b'O\x15=\x1d'
 GCN_HEADER = bytes.fromhex('ff03ebbe')
 BINARY_MAGIC = b'OrbShdr'
+# ShaderBinaryInfo.type is GnmShaderBinaryType, NOT GnmShaderType.
+# Source: opengnm gnm_shaderbinary.h; confirmed v01.00: 1 PS, 1 VS, 47 CS.
 STAGES = {
-    0: 'unknown', 1: 'vertex', 2: 'pixel', 3: 'geometry',
-    4: 'compute', 5: 'export', 6: 'local', 7: 'hull',
+    0: 'pixel', 1: 'vertex', 2: 'export-vertex', 3: 'local-vertex',
+    4: 'compute', 5: 'geometry', 6: 'copy-vertex', 7: 'hull',
+    8: 'domain-vertex', 9: 'domain-export',
 }
 
 
