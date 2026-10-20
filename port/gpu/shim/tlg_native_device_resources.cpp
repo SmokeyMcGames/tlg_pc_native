@@ -119,11 +119,13 @@ bool DeviceResources::CreateIndexBuffer(std::uint64_t id, std::uint64_t count,
         return false;
     }
     const std::uint64_t handle = Identity(gpu);
+    // Enforce one lock order (state mutex -> registry mutex) for all create,
+    // update, and retire operations; concurrent guests cannot invert locks.
+    std::scoped_lock lock{state_->mutex};
     if (!state_->registry.RegisterIndexBuffer(id, handle, count)) {
         vmaDestroyBuffer(state_->allocator, gpu, alloc);
         return false;
     }
-    std::scoped_lock lock{state_->mutex};
     if (auto it = state_->active.find(id); it != state_->active.end()) {
         state_->retired.push_back(it->second);
         it->second = {gpu, alloc, count, width};
@@ -249,11 +251,6 @@ bool DeviceResources::CreateColorTarget(std::uint64_t guest,
         return false;
     }
     const auto handle = Identity(static_cast<VkImageView>(*view));
-    if (!state_->registry.RegisterTargetSet(guest, handle)) {
-        view.reset();
-        vmaDestroyImage(state_->allocator, image, allocation);
-        return false;
-    }
     auto target = std::make_unique<State::ColorTarget>();
     target->gpu = image;
     target->allocation = allocation;
@@ -262,6 +259,10 @@ bool DeviceResources::CreateColorTarget(std::uint64_t guest,
     target->height = height;
     target->format = format;
     std::scoped_lock lock{state_->mutex};
+    if (!state_->registry.RegisterTargetSet(guest, handle)) {
+        state_->Destroy(*target);
+        return false;
+    }
     if (auto it = state_->color_active.find(guest); it != state_->color_active.end()) {
         state_->color_retired.push_back(std::move(it->second));
         it->second = std::move(target);
