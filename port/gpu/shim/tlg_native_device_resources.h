@@ -16,6 +16,8 @@ namespace Shader { struct RuntimeInfo; struct Profile; }
 
 namespace TlgNativeVk {
 struct GcnShaderInput;
+struct NativeShaderKey;
+class NativeShaderRegistry;
 class DeviceResources {
 public:
     DeviceResources(const Vulkan::Instance& instance, ResourceRegistry& registry);
@@ -43,6 +45,13 @@ public:
         const GcnShaderInput& fragment,
         const Shader::RuntimeInfo& fragment_runtime,
         const Shader::Profile& profile, std::uint32_t color_format);
+    // Fast native shader path: reuse immutable, already translated SPIR-V
+    // entries for the exact game, driver, compiler and descriptor specialization.
+    // This avoids re-running GCN translation when the pipeline is recreated.
+    bool CreateGraphicsPipelineFromCachedSpirv(
+        std::uint64_t guest_id, const NativeShaderRegistry& shader_cache,
+        const NativeShaderKey& vertex_key,
+        const NativeShaderKey& fragment_key, std::uint32_t color_format);
     void RetireGraphicsPipeline(std::uint64_t guest_id);
     // GPU-owner-thread-only lookup. A caller must not keep the returned handle
     // beyond replacement, retirement or a GPU submission lifetime.
