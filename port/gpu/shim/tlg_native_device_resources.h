@@ -41,10 +41,12 @@ public:
     // Independent native Vulkan pipeline from already-translated SPIR-V.
     // Initial implementation supports a fixed full-screen triangle vertex
     // layout and one color attachment. Not yet a general game material path.
-    bool CreateGraphicsPipeline(std::uint64_t guest_id,
-                                std::span<const std::uint32_t> vertex_spirv,
-                                std::span<const std::uint32_t> fragment_spirv,
-                                std::uint32_t color_format);
+    bool CreateGraphicsPipeline(
+        std::uint64_t guest_id,
+        std::span<const std::uint32_t> vertex_spirv,
+        std::span<const std::uint32_t> fragment_spirv,
+        std::uint32_t color_format,
+        std::span<const NativeDescriptorBinding> resource_bindings = {});
     // Native game shader path: consume *verified high-level Js* GCN shader
     // inputs directly, without reading Gnm/PM4 register packets. Fails closed
     // unless the shader/resource specialization is complete and both stages
@@ -67,6 +69,8 @@ public:
     // beyond replacement, retirement or a GPU submission lifetime.
     bool QueryGraphicsPipeline(std::uint64_t guest_id,
                                std::uint64_t& vk_handle) const;
+    bool QueryGraphicsPipelineLayout(std::uint64_t guest_id,
+                                     std::uint64_t& vk_layout) const;
 
     // Dedicated, descriptor-free native Vulkan compute pipeline. Compute
     // handles are type-tagged and cannot pass graphics draw validation.
