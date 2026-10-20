@@ -24,6 +24,15 @@ typedef int (*TlgGpuNativeJsPop)(void *user, TlgJsNativeDrawCandidate *record,
                                  uint64_t *dropped_since_last);
 void tlggpu_set_native_js_draw_source(TlgGpuNativeJsPop pop, void *user);
 
+/* Native renderer input stream (v2): preserve ALL captured high-level Js
+ * events, including shader/resource creation. The legacy draw-only callback
+ * remains available for standalone tests but the new source supersedes it.
+ * The consumer NEVER dereferences guest pointers inside these records.
+ */
+typedef int (*TlgGpuNativeJsEventPop)(void *user, TlgJsNativeCommand *record,
+                                      uint64_t *dropped_since_last);
+void tlggpu_set_native_js_event_source(TlgGpuNativeJsEventPop pop, void *user);
+
 /* Registers kernel event queues (needed with or without graphics). */
 void tlggpu_register_kernel(void);
 /* Creates window, Vulkan device, presenter and GPU command processor. */
