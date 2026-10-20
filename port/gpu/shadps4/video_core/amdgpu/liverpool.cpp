@@ -1562,9 +1562,16 @@ Liverpool::Task Liverpool::ProcessCompute(std::span<const u32> acb, u32 vqid) {
                 break;
             }
             const auto cmd_address = reinterpret_cast<const void*>(header);
-            rasterizer->ScopeMarker("asc[{}]:{}:DispatchDirect",
-                                    fmt::make_format_args(vqid, cmd_address),
-                                    [&] { rasterizer->DispatchDirect(); });
+            if (header->type3.NumWords() + 1 == TlgNativeDraw::Bridge::DispatchWords &&
+                TlgNativeDraw::Get().TryTake(reinterpret_cast<const u32*>(header),
+                                             TlgNativeDraw::Bridge::Kind::DispatchDirect,
+                                             TlgNativeDraw::Bridge::DispatchWords)) {
+                rasterizer->DispatchDirect();
+            } else {
+                rasterizer->ScopeMarker("asc[{}]:{}:DispatchDirect",
+                                        fmt::make_format_args(vqid, cmd_address),
+                                        [&] { rasterizer->DispatchDirect(); });
+            }
             break;
         }
         case PM4ItOpcode::DispatchIndirect: {
