@@ -28,6 +28,37 @@
  * push rbp; mov rbp,rsp; push r15; push r14; push r12; push rbx;
  * sub rsp,0x220. The following mov r12,[rip+0x3c5c27] must stay in place.
  */
+/* Verified v01.00 JsDeviceContext::PrepareDraw at guest+0x13143e0.
+ * Disassembly loads [rdi+0x4678], [rdi+0x4688] and tests [rdi+0x4680]
+ * immediately after the prologue; captures their opaque values. The first
+ * 24 bytes are relocation-free, complete stack/register instructions.
+ * Does NOT reinterpret those offsets as native shader handles yet.
+ */
+#define TLG_JS_100_PREPARE_DRAW_ENTRY UINT64_C(0x13143e0)
+#define TLG_JS_PREPARE_DRAW_PROLOGUE_BYTES 24
+#define TLG_JS_PREPARE_DRAW_FINGERPRINT_BYTES 48
+#define TLG_JS_PREPARE_DRAW_TRAMPOLINE_BYTES (TLG_JS_PREPARE_DRAW_PROLOGUE_BYTES + 14)
+static const uint8_t tlg_js_100_prepare_draw_prologue[TLG_JS_PREPARE_DRAW_PROLOGUE_BYTES] = {
+    0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+    0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xe4,
+    0xe0,0x48,0x81,0xec,0x80,0x05,0x00,0x00,
+};
+static const uint8_t tlg_js_100_prepare_draw_fingerprint[TLG_JS_PREPARE_DRAW_FINGERPRINT_BYTES] = {
+    0x55,0x48,0x89,0xe5,0x41,0x57,0x41,0x56,
+    0x41,0x55,0x41,0x54,0x53,0x48,0x83,0xe4,
+    0xe0,0x48,0x81,0xec,0x80,0x05,0x00,0x00,
+    0x48,0x8b,0x05,0xc1,0x3c,0x3c,0x00,0x89,
+    0x74,0x24,0x38,0x49,0x89,0xfb,0x41,0x89,
+    0xd4,0x48,0x8b,0x00,0x48,0x89,0x84,0x24,
+};
+static inline int tlg_js_100_prepare_draw_signature_match(
+    const uint8_t* image, size_t image_size) {
+    const uint64_t at = TLG_JS_100_PREPARE_DRAW_ENTRY;
+    return image && image_size >= at + TLG_JS_PREPARE_DRAW_FINGERPRINT_BYTES &&
+           !memcmp(image + at, tlg_js_100_prepare_draw_fingerprint,
+                   TLG_JS_PREPARE_DRAW_FINGERPRINT_BYTES);
+}
+
 #define TLG_JS_100_DRAW_ENTRY UINT64_C(0x1312480)
 #define TLG_JS_DRAW_PROLOGUE_BYTES 18
 #define TLG_JS_DRAW_FINGERPRINT_BYTES 48
@@ -213,6 +244,17 @@ static inline int tlg_js_build_draw_trampoline(
     memcpy(out, original, len);
     tlg_js_write_absolute_jump(out + len, continuation);
     return TLG_JS_DRAW_TRAMPOLINE_BYTES;
+}
+static inline int tlg_js_build_prepare_draw_trampoline(
+    uint8_t* out, size_t capacity, const uint8_t* original,
+    size_t len, uintptr_t continuation) {
+    if (!out || !original || len != TLG_JS_PREPARE_DRAW_PROLOGUE_BYTES ||
+        capacity < TLG_JS_PREPARE_DRAW_TRAMPOLINE_BYTES ||
+        memcmp(original, tlg_js_100_prepare_draw_prologue, len))
+        return 0;
+    memcpy(out, original, len);
+    tlg_js_write_absolute_jump(out + len, continuation);
+    return TLG_JS_PREPARE_DRAW_TRAMPOLINE_BYTES;
 }
 
 #endif
