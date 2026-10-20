@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <span>
 
 namespace TlgNativeVk {
 namespace {
@@ -86,18 +87,20 @@ bool ComputeSmoke::Init() {
         .descriptorCount = 1,
         .stageFlags = vk::ShaderStageFlagBits::eCompute,
     };
-    auto [set_result, desc] = device.createDescriptorSetLayoutUnique({
+    const vk::DescriptorSetLayoutCreateInfo set_info{
         .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
         .bindingCount = 1,
         .pBindings = &storage_binding,
-    });
+    };
+    auto [set_result, desc] = device.createDescriptorSetLayoutUnique(set_info);
     if (set_result != vk::Result::eSuccess) return false;
     state_->descriptors = std::move(desc);
     const vk::DescriptorSetLayout set_layout = *state_->descriptors;
-    auto [layout_result, layout] = device.createPipelineLayoutUnique({
+    const vk::PipelineLayoutCreateInfo layout_ci{
         .setLayoutCount = 1,
         .pSetLayouts = &set_layout,
-    });
+    };
+    auto [layout_result, layout] = device.createPipelineLayoutUnique(layout_ci);
     if (layout_result != vk::Result::eSuccess) return false;
     state_->layout = std::move(layout);
 
