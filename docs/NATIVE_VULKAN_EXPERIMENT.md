@@ -26,10 +26,12 @@ module compatibility remain unverified. **No game executable is committed**.
 
 ### GPU phase A — Gnm draw bridge
 
-- `TLG_NATIVE_DRAW_BRIDGE=1` enables validated hints for Gnm `DrawIndexAuto`.
-- The Gnm writer captures the original, unmodified PM4 packet. When the GPU
-  interpreter sees the matching packet, it directly invokes the existing Vulkan
-  `Rasterizer::Draw` path (without the normal diagnostic marker wrapper).
+- `TLG_NATIVE_DRAW_BRIDGE=1` enables validated hints for Gnm `DrawIndexAuto`,
+  `DrawIndexOffset` (indexed draws), and `DispatchDirect` (graphics and async compute).
+- The Gnm writer captures original, unmodified 3- or 5-word PM4 packets. When the
+  GPU interpreter sees a matching packet of the correct operation type, it calls
+  the existing Vulkan `Rasterizer::Draw` or `Rasterizer::DispatchDirect` typed
+  path, bypassing the corresponding diagnostic marker wrapper.
 - Missing, overwritten or modified packets fall back to the legacy path.
 - The original register-state updates, resource binding, draw-preparation,
   Vulkan synchronization, and event/fence ordering are preserved.
