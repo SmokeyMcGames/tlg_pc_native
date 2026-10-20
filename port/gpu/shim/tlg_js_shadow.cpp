@@ -20,6 +20,7 @@ std::atomic<std::uint64_t> g_indexed{0}, g_instanced{0}, g_dropped{0};
 std::atomic<std::uint64_t> g_invalid{0}, g_batches{0}, g_last_context{0}, g_last_sequence{0};
 std::atomic<std::uint64_t> g_buffer_creates{0}, g_last_buffer_description{0};
 std::atomic<std::uint64_t> g_last_buffer_head{0}, g_last_buffer_tail{0};
+std::atomic<std::uint64_t> g_pixel_creates{0}, g_last_shader_head{0}, g_last_shader_tail{0};
 }
 
 extern "C" void tlggpu_set_native_js_draw_source(TlgGpuNativeJsPop pop, void* user) {
@@ -48,6 +49,7 @@ void PumpOnGpuSubmission() {
     std::uint64_t indexed = 0, instanced = 0, invalid = 0, drops = 0;
     std::uint64_t buffer_creates = 0, last_description = 0;
     std::uint64_t last_head = 0, last_tail = 0;
+    std::uint64_t pixel_creates = 0, last_shader_head = 0, last_shader_tail = 0;
     std::uint64_t last_context = 0, last_sequence = 0;
     TlgJsNativeDrawCandidate cmd{};
     TlgJsNativeCommand raw{};
@@ -68,6 +70,19 @@ void PumpOnGpuSubmission() {
                     last_description = created.description;
                     last_head = created.description_head;
                     last_tail = created.description_tail;
+                    last_sequence = created.sequence;
+                } else {
+                    ++invalid;
+                }
+                drops += discarded;
+                continue;
+            }
+            if (raw.kind == TLG_JS_NATIVE_CREATE_PIXEL_SHADER) {
+                TlgJsNativeShaderCreateCandidate created{};
+                if (tlg_js_native_decode_pixel_shader_create(&raw, &created)) {
+                    ++pixel_creates;
+                    last_shader_head = created.blob_head;
+                    last_shader_tail = created.blob_tail;
                     last_sequence = created.sequence;
                 } else {
                     ++invalid;
@@ -109,6 +124,11 @@ void PumpOnGpuSubmission() {
         g_last_buffer_head.store(last_head, std::memory_order_relaxed);
         g_last_buffer_tail.store(last_tail, std::memory_order_relaxed);
     }
+    if (pixel_creates) {
+        g_pixel_creates.fetch_add(pixel_creates, std::memory_order_relaxed);
+        g_last_shader_head.store(last_shader_head, std::memory_order_relaxed);
+        g_last_shader_tail.store(last_shader_tail, std::memory_order_relaxed);
+    }
     if (invalid) g_invalid.fetch_add(invalid, std::memory_order_relaxed);
     if (drops) g_dropped.fetch_add(drops, std::memory_order_relaxed);
     if (last_sequence) {
@@ -123,6 +143,7 @@ void PumpOnGpuSubmission() {
         const auto stats = Snapshot();
         std::printf("Native Js shadow Vulkan stream: indexed=%llu instanced=%llu "
                     "CreateBuffer=%llu (last bytes=%u usage=%u bind=%#x cpu=%#x) "
+                    "CreatePixelShader=%llu "
                     "dropped=%llu invalid=%llu batches=%llu last=%llu; "
                     "original GPU renderer still active\n",
                     static_cast<unsigned long long>(stats.indexed),
@@ -130,6 +151,7 @@ void PumpOnGpuSubmission() {
                     static_cast<unsigned long long>(stats.buffer_creates),
                     stats.last_buffer_bytes, stats.last_buffer_usage,
                     stats.last_buffer_bind_flags, stats.last_buffer_cpu_access,
+                    static_cast<unsigned long long>(stats.pixel_shader_creates),
                     static_cast<unsigned long long>(stats.dropped),
                     static_cast<unsigned long long>(stats.invalid),
                     static_cast<unsigned long long>(stats.batches),
@@ -142,6 +164,9 @@ Stats Snapshot() {
         .indexed = g_indexed.load(std::memory_order_relaxed),
         .indexed_instanced = g_instanced.load(std::memory_order_relaxed),
         .buffer_creates = g_buffer_creates.load(std::memory_order_relaxed),
+        .pixel_shader_creates = g_pixel_creates.load(std::memory_order_relaxed),
+        .last_shader_head = g_last_shader_head.load(std::memory_order_relaxed),
+        .last_shader_tail = g_last_shader_tail.load(std::memory_order_relaxed),
         .last_buffer_description = g_last_buffer_description.load(std::memory_order_relaxed),
         .last_buffer_bytes = static_cast<std::uint32_t>(
             g_last_buffer_head.load(std::memory_order_relaxed)),
@@ -165,6 +190,7 @@ void ResetForTest() {
     g_indexed.store(0); g_instanced.store(0); g_dropped.store(0);
     g_buffer_creates.store(0); g_last_buffer_description.store(0);
     g_last_buffer_head.store(0); g_last_buffer_tail.store(0);
+    g_pixel_creates.store(0); g_last_shader_head.store(0); g_last_shader_tail.store(0);
     g_batches.store(0); g_invalid.store(0);
     g_last_context.store(0); g_last_sequence.store(0);
 }
