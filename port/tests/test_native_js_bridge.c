@@ -17,6 +17,7 @@
 __attribute__((used)) uintptr_t tlg_js_indexed_gateway;
 __attribute__((used)) volatile uint64_t tlg_js_trace_indexed_calls;
 __attribute__((used)) volatile uintptr_t tlg_js_trace_last_context;
+volatile uintptr_t tlg_js_trace_last_arg1, tlg_js_trace_last_arg2, tlg_js_trace_last_arg3;
 
 __attribute__((naked, used, noinline))
 static void hook_entry(void) {
@@ -24,6 +25,9 @@ static void hook_entry(void) {
         "pushfq\n\t"
         "lock incq tlg_js_trace_indexed_calls(%rip)\n\t"
         "movq %rdi, tlg_js_trace_last_context(%rip)\n\t"
+        "movq %rsi, tlg_js_trace_last_arg1(%rip)\n\t"
+        "movq %rdx, tlg_js_trace_last_arg2(%rip)\n\t"
+        "movq %rcx, tlg_js_trace_last_arg3(%rip)\n\t"
         "popfq\n\t"
         "jmp *tlg_js_indexed_gateway(%rip)\n\t");
 }
@@ -64,9 +68,10 @@ int main(void) {
         0x41, 0x5f, 0x5d, 0xb8, 0x2a, 0, 0, 0, 0xc3
     };
     memcpy(machine, function, sizeof(function));
-    typedef int (__attribute__((sysv_abi)) *GuestFunction)(void *);
+    typedef int (__attribute__((sysv_abi)) *GuestFunction)(void *, void *, void *, void *);
     GuestFunction fn = (GuestFunction)machine;
-    assert(fn((void *)(uintptr_t)0x123456) == 42);
+    assert(fn((void *)(uintptr_t)0x123456, (void *)(uintptr_t)0x111, 
+              (void *)(uintptr_t)0x222, (void *)(uintptr_t)0x333) == 42);
     unsigned char *trampoline = machine + 128;
     assert(tlg_js_build_trampoline(trampoline, 4096-128, machine,
                                     TLG_JS_PROLOGUE_BYTES,
@@ -75,10 +80,15 @@ int main(void) {
     tlg_js_indexed_gateway = (uintptr_t)trampoline;
     tlg_js_write_absolute_jump(machine, (uintptr_t)&hook_entry);
     __builtin___clear_cache((char *)machine, (char *)(machine + 64));
-    assert(fn((void *)(uintptr_t)0x123456) == 42);
-    assert(fn((void *)(uintptr_t)0x654321) == 42);
+    assert(fn((void *)(uintptr_t)0x123456, (void *)(uintptr_t)0x111, 
+              (void *)(uintptr_t)0x222, (void *)(uintptr_t)0x333) == 42);
+    assert(fn((void *)(uintptr_t)0x654321, (void *)(uintptr_t)0x444,
+              (void *)(uintptr_t)0x555, (void *)(uintptr_t)0x666) == 42);
     assert(tlg_js_trace_indexed_calls == 2);
     assert(tlg_js_trace_last_context == 0x654321);
+    assert(tlg_js_trace_last_arg1 == 0x444);
+    assert(tlg_js_trace_last_arg2 == 0x555);
+    assert(tlg_js_trace_last_arg3 == 0x666);
 #ifdef _WIN32
     VirtualFree(machine, 0, MEM_RELEASE);
 #else
