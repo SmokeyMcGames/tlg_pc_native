@@ -32,6 +32,10 @@ public:
                                 std::span<const std::uint32_t> fragment_spirv,
                                 std::uint32_t color_format);
     void RetireGraphicsPipeline(std::uint64_t guest_id);
+    // GPU-owner-thread-only lookup. A caller must not keep the returned handle
+    // beyond replacement, retirement or a GPU submission lifetime.
+    bool QueryGraphicsPipeline(std::uint64_t guest_id,
+                               std::uint64_t& vk_handle) const;
 
     bool CreateIndexBuffer(std::uint64_t guest_id, std::uint64_t index_count,
                            std::uint32_t index_width, const void* initial_data,
