@@ -877,8 +877,19 @@ static void tlg_js_create_buffer_entry(void) {
         "movq %rsi, 24(%r10)\n\t"
         "movq %rdx, 32(%r10)\n\t"
         "movq %rcx, 40(%r10)\n\t"
-        "movq %r8, 48(%r10)\n\t"
-        "movq %r9, 56(%r10)\n\t"
+        // Capture the original v1.00 JsBufferDesc fields while the guest
+        // pointer is still live. The guest itself requires this description
+        // and reads [rsi] immediately after the prologue.
+        "movq $0, 48(%r10)\n\t"
+        "movq $0, 56(%r10)\n\t"
+        "testq %rsi, %rsi\n\t"
+        "jz 1f\n\t"
+        "movq (%rsi), %rax\n\t"
+        "movq %rax, 48(%r10)\n\t"
+        "movq 8(%rsi), %rax\n\t"
+        "movq %rax, 56(%r10)\n\t"
+        "1:\n\t"
+        // Aligned generation published after all descriptor bytes.
         "movq %r11, (%r10)\n\t"
         "popq %r11\n\t"
         "popq %r10\n\t"
