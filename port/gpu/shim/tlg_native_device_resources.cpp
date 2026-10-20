@@ -14,6 +14,7 @@
 #include <unordered_map>
 #include <vector>
 #include <new>
+#include <utility>
 
 namespace TlgNativeVk {
 namespace {
@@ -43,6 +44,7 @@ struct DeviceResources::State {
         vk::UniqueDescriptorSetLayout descriptors{};
         vk::UniquePipelineLayout layout{};
         vk::UniquePipeline pipeline{};
+        std::vector<NativeDescriptorBinding> bindings{};
     };
     struct ColorTarget {
         VkImage gpu = VK_NULL_HANDLE;
@@ -198,6 +200,7 @@ bool DeviceResources::CreateComputePipeline(
     if (module_result != vk::Result::eSuccess)
         return false;
     auto resource = std::make_unique<State::GraphicsPipeline>();
+    resource->bindings.assign(resource_bindings.begin(), resource_bindings.end());
     // GCN-generated compute code uses the canonical stage user-data push
     // structure. A high-level Js compute dispatch must provide *verified*
     // values before recording a native Vulkan dispatch.
@@ -461,6 +464,7 @@ bool DeviceResources::CreateGraphicsPipeline(
     if (fs_result != vk::Result::eSuccess) return false;
 
     auto resource = std::make_unique<State::GraphicsPipeline>();
+    resource->bindings.assign(resource_bindings.begin(), resource_bindings.end());
     // The existing GCN -> SPIR-V translator uses Shader::PushData for
     // viewport mapping, stage user data and buffer offsets. Expose the same
     // canonical 128-byte-or-smaller ABI even for descriptor-free shaders.
@@ -1036,6 +1040,117 @@ bool DeviceResources::QuerySampledBinding(
         .image_generation = binding.image_generation,
         .sampler_generation = binding.sampler_generation,
     };
+    return true;
+}
+
+// Records complete descriptor writes from native Vulkan allocations only.
+// The shader layout is immutable on the live native pipeline. Each resource
+// must match an independently captured guest generation and a ready Vulkan
+// allocation. This does not inspect PS4 shader registers or PM4 commands.
+// Call on the GPU submission owner before the draw/dispatch that consumes it.
+bool DeviceResources::RecordNativeImageDescriptors(
+    std::uint64_t pipeline_id, NativePipelineKind pipeline_kind,
+    std::span<const NativeGuestDescriptorBinding> assignments,
+    Vulkan::Scheduler& scheduler) {
+    if (!pipeline_id ||
+        (pipeline_kind != NativePipelineKind::Graphics &&
+         pipeline_kind != NativePipelineKind::Compute))
+        return false;
+
+    struct ResolvedWrite {
+        std::uint32_t binding = 0;
+        vk::DescriptorType type{};
+        std::vector<vk::DescriptorImageInfo> images{};
+    };
+
+    // Keep one lock order: device resources -> identity registry. The callback
+    // captures handles and image infos by value; deferred recording threads
+    // never dereference a temporary Js pointer, state map, or stack descriptor.
+    std::scoped_lock lock{state_->mutex};
+    const auto& pipelines = pipeline_kind == NativePipelineKind::Graphics
+        ? state_->pipelines : state_->compute_pipelines;
+    const auto it = pipelines.find(pipeline_id);
+    if (it == pipelines.end() || !it->second->pipeline ||
+        !it->second->layout ||
+        !ValidateNativeGuestDescriptors(it->second->bindings, assignments))
+        return false;
+    if (assignments.empty())
+        return true;
+    if (!it->second->descriptors)
+        return false;
+
+    std::vector<ResolvedWrite> resolved;
+    resolved.reserve(assignments.size());
+    for (const auto& assignment : assignments) {
+        ResolvedWrite write{};
+        write.binding = assignment.binding;
+        switch (assignment.kind) {
+        case NativeDescriptorKind::SampledImage:
+            write.type = vk::DescriptorType::eSampledImage;
+            break;
+        case NativeDescriptorKind::Sampler:
+            write.type = vk::DescriptorType::eSampler;
+            break;
+        default:
+            // Storage buffers, storage images, and unknown resource types
+            // require their own native owner and synchronization path.
+            return false;
+        }
+        write.images.reserve(assignment.resources.size());
+        for (const auto& requested : assignment.resources) {
+            ResourceRegistry::SampledIdentity identity{};
+            if (assignment.kind == NativeDescriptorKind::SampledImage) {
+                const auto texture = state_->sampled_textures.find(requested.guest_id);
+                if (texture == state_->sampled_textures.end() ||
+                    !texture->second->view ||
+                    !texture->second->state.Ready(
+                        texture->second->state.Generation()) ||
+                    !state_->registry.TryResolveSampledImage(
+                        requested.guest_id, identity) ||
+                    identity.generation != requested.generation ||
+                    identity.vk_handle !=
+                        Identity(static_cast<VkImageView>(*texture->second->view)))
+                    return false;
+                write.images.push_back(vk::DescriptorImageInfo{
+                    .imageView = *texture->second->view,
+                    .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+                });
+            } else {
+                const auto sampler = state_->native_samplers.find(requested.guest_id);
+                if (sampler == state_->native_samplers.end() ||
+                    !sampler->second->handle ||
+                    !state_->registry.TryResolveSampler(requested.guest_id, identity) ||
+                    identity.generation != requested.generation ||
+                    identity.vk_handle !=
+                        Identity(static_cast<VkSampler>(*sampler->second->handle)))
+                    return false;
+                write.images.push_back(vk::DescriptorImageInfo{
+                    .sampler = *sampler->second->handle,
+                });
+            }
+        }
+        resolved.push_back(std::move(write));
+    }
+
+    const vk::PipelineLayout layout = *it->second->layout;
+    const vk::PipelineBindPoint bind_point =
+        pipeline_kind == NativePipelineKind::Compute
+            ? vk::PipelineBindPoint::eCompute
+            : vk::PipelineBindPoint::eGraphics;
+    scheduler.Record([layout, bind_point, resolved = std::move(resolved)]
+                     (vk::CommandBuffer cmd) {
+        std::vector<vk::WriteDescriptorSet> writes;
+        writes.reserve(resolved.size());
+        for (const auto& resource : resolved) {
+            writes.push_back(vk::WriteDescriptorSet{
+                .dstBinding = resource.binding,
+                .descriptorCount = static_cast<std::uint32_t>(resource.images.size()),
+                .descriptorType = resource.type,
+                .pImageInfo = resource.images.data(),
+            });
+        }
+        cmd.pushDescriptorSetKHR(bind_point, layout, 0, writes);
+    });
     return true;
 }
 

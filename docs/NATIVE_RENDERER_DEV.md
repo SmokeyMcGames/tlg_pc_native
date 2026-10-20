@@ -395,6 +395,27 @@ barriers, render targets and draw synchronization remain unverified. Do not
 allow this new pipeline entry point to submit or replace a game draw until
 those objects and lifetimes are validated.
 
+## Independently owned native Vulkan descriptor recording
+
+`tlg_native_descriptor_bindings.h` now requires an ordered, complete set of
+game-owned descriptor IDs **and exact resource generations** for every slot of
+the reflected pipeline layout. A guest address alone cannot authorize reuse
+after its native Vulkan allocation has been replaced.
+
+`DeviceResources::RecordNativeImageDescriptors` checks the live pipeline's
+layout and every sampled-image/sampler handle against its native resource
+registry. It records `vkCmdPushDescriptorSetKHR` using owned image-descriptor
+snapshots on the Vulkan scheduler, with no PM4 decoding or guest pointers
+held by the recording thread. Shader-readable texture transitions must already
+be recorded on the same scheduler. Storage images and storage buffers remain
+unsupported and are explicitly rejected.
+
+The opt-in textured, microtiled and macrotiled native offscreen triangle
+tests now use this shared binding function instead of hardcoded descriptor
+writes. The CPU-only `native-descriptor-bindings-test` verifies the guest
+object count, layout shape and nonzero generations. Actual GPU/Windows execution
+is **not yet verified**, and this does not capture real game descriptors.
+
 ## Critical work that remains before removing the old GPU interpreter
 
 1. Identify and signature-check all **game-level** resource creation,

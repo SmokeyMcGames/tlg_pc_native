@@ -252,35 +252,33 @@ bool TriangleSmoke::RecordOnce() {
     const vk::Pipeline pipeline{raw_pipeline};
     const vk::Buffer indices{raw_indices};
     const TlgNativeVk::Draw draw = resolved.command;
-    vk::PipelineLayout descriptor_layout{};
-    vk::ImageView sampled_view{};
-    vk::Sampler sampled_sampler{};
+    // Exercise the same native descriptor validation used by future
+    // high-level Js draw bindings, instead of a smoke-only hardcoded Vk
+    // descriptor writer. Only exact registered generations can be submitted.
     if (state_->textured) {
         DeviceResources::SampledImageInfo sampled{};
-        std::uint64_t layout = 0;
-        if (!state_->resources.QuerySampledBinding(SmokeTextureId, SmokeSamplerId,
-                                                    sampled) ||
-            !state_->resources.QueryGraphicsPipelineLayout(SmokePipelineId, layout))
+        if (!state_->resources.QuerySampledBinding(
+                SmokeTextureId, SmokeSamplerId, sampled))
             return false;
-        VkPipelineLayout raw_layout = VK_NULL_HANDLE;
-        VkImageView raw_view = VK_NULL_HANDLE;
-        VkSampler raw_sampler = VK_NULL_HANDLE;
-        static_assert(sizeof(raw_layout) == sizeof(layout));
-        static_assert(sizeof(raw_view) == sizeof(sampled.image_view));
-        static_assert(sizeof(raw_sampler) == sizeof(sampled.sampler));
-        std::memcpy(&raw_layout, &layout, sizeof(raw_layout));
-        std::memcpy(&raw_view, &sampled.image_view, sizeof(raw_view));
-        std::memcpy(&raw_sampler, &sampled.sampler, sizeof(raw_sampler));
-        descriptor_layout = vk::PipelineLayout{raw_layout};
-        sampled_view = vk::ImageView{raw_view};
-        sampled_sampler = vk::Sampler{raw_sampler};
+        const std::array<NativeGuestDescriptorBinding, 2> assignments{{
+            NativeGuestDescriptorBinding{
+                .binding = 0, .kind = NativeDescriptorKind::SampledImage,
+                .resources = {{SmokeTextureId, sampled.image_generation}},
+            },
+            NativeGuestDescriptorBinding{
+                .binding = 1, .kind = NativeDescriptorKind::Sampler,
+                .resources = {{SmokeSamplerId, sampled.sampler_generation}},
+            },
+        }};
+        if (!state_->resources.RecordNativeImageDescriptors(
+                SmokePipelineId, NativePipelineKind::Graphics,
+                assignments, state_->scheduler))
+            return false;
     }
-    const bool textured = state_->textured;
     const auto color = state_->color_view;
     const auto native_image = vk::Image{state_->color_image};
     const auto staging = vk::Buffer{state_->readback_buffer};
-    state_->scheduler.Record([pipeline,indices,draw,color,native_image,staging,
-                              descriptor_layout,sampled_view,sampled_sampler,textured]
+    state_->scheduler.Record([pipeline,indices,draw,color,native_image,staging]
                               (vk::CommandBuffer cmd) {
         const vk::RenderingAttachmentInfo attachment{
             .imageView=color,
@@ -298,31 +296,6 @@ bool TriangleSmoke::RecordOnce() {
             .pColorAttachments=&attachment,
         };
         cmd.beginRendering(pass);
-        if (textured) {
-            const vk::DescriptorImageInfo image_info{
-                .imageView = sampled_view,
-                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-            };
-            const vk::DescriptorImageInfo sampler_info{
-                .sampler = sampled_sampler,
-            };
-            const std::array descriptors{
-                vk::WriteDescriptorSet{
-                    .dstBinding = 0,
-                    .descriptorCount = 1,
-                    .descriptorType = vk::DescriptorType::eSampledImage,
-                    .pImageInfo = &image_info,
-                },
-                vk::WriteDescriptorSet{
-                    .dstBinding = 1,
-                    .descriptorCount = 1,
-                    .descriptorType = vk::DescriptorType::eSampler,
-                    .pImageInfo = &sampler_info,
-                },
-            };
-            cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics,
-                                     descriptor_layout, 0, descriptors);
-        }
         cmd.bindIndexBuffer(indices, 0, vk::IndexType::eUint16);
         cmd.setViewport(0, vk::Viewport{
             .width=float(SmokeSize.width),.height=float(SmokeSize.height),

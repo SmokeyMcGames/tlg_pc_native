@@ -7,6 +7,7 @@
 // remain opt-in until resource and framebuffer parity are established.
 #include "tlg_native_vk_resources.h"
 #include "tlg_native_descriptor_layout.h"
+#include "tlg_native_descriptor_bindings.h"
 #include "tlg_native_texture_layout.h"
 #include "tlg_native_rgba8_detile.h"
 #include "tlg_native_rgba8_macro_detile.h"
@@ -151,6 +152,16 @@ public:
     };
     bool QuerySampledBinding(std::uint64_t texture_id, std::uint64_t sampler_id,
                              SampledImageInfo& result) const;
+
+    // The GPU submission owner records complete sampled-image/sampler
+    // descriptors into the existing Vulkan scheduler. Each guest resource
+    // must match the exact current generation of the pipeline's reflected
+    // descriptor layout. Unsupported storage buffers/images are rejected;
+    // a validated layout alone never makes game-owned resources drawable.
+    bool RecordNativeImageDescriptors(
+        std::uint64_t pipeline_id, NativePipelineKind pipeline_kind,
+        std::span<const NativeGuestDescriptorBinding> assignments,
+        Vulkan::Scheduler& scheduler);
 
     struct ColorTargetInfo {
         std::uint64_t image = 0, view = 0;
