@@ -19,6 +19,7 @@ std::atomic<void*> g_event_user{nullptr};
 std::atomic<std::uint64_t> g_indexed{0}, g_instanced{0}, g_dropped{0};
 std::atomic<std::uint64_t> g_invalid{0}, g_batches{0}, g_last_context{0}, g_last_sequence{0};
 std::atomic<std::uint64_t> g_buffer_creates{0}, g_last_buffer_description{0};
+std::atomic<std::uint64_t> g_last_buffer_head{0}, g_last_buffer_tail{0};
 }
 
 extern "C" void tlggpu_set_native_js_draw_source(TlgGpuNativeJsPop pop, void* user) {
@@ -46,6 +47,7 @@ void PumpOnGpuSubmission() {
     std::uint64_t discarded = 0;
     std::uint64_t indexed = 0, instanced = 0, invalid = 0, drops = 0;
     std::uint64_t buffer_creates = 0, last_description = 0;
+    std::uint64_t last_head = 0, last_tail = 0;
     std::uint64_t last_context = 0, last_sequence = 0;
     TlgJsNativeDrawCandidate cmd{};
     TlgJsNativeCommand raw{};
@@ -64,6 +66,8 @@ void PumpOnGpuSubmission() {
                 if (tlg_js_native_decode_buffer_create(&raw, &created)) {
                     ++buffer_creates;
                     last_description = created.description;
+                    last_head = created.description_head;
+                    last_tail = created.description_tail;
                     last_sequence = created.sequence;
                 } else {
                     ++invalid;
@@ -102,6 +106,8 @@ void PumpOnGpuSubmission() {
     if (buffer_creates) {
         g_buffer_creates.fetch_add(buffer_creates, std::memory_order_relaxed);
         g_last_buffer_description.store(last_description, std::memory_order_relaxed);
+        g_last_buffer_head.store(last_head, std::memory_order_relaxed);
+        g_last_buffer_tail.store(last_tail, std::memory_order_relaxed);
     }
     if (invalid) g_invalid.fetch_add(invalid, std::memory_order_relaxed);
     if (drops) g_dropped.fetch_add(drops, std::memory_order_relaxed);
@@ -116,11 +122,14 @@ void PumpOnGpuSubmission() {
         last_report = now;
         const auto stats = Snapshot();
         std::printf("Native Js shadow Vulkan stream: indexed=%llu instanced=%llu "
-                    "CreateBuffer=%llu dropped=%llu invalid=%llu batches=%llu last=%llu; "
+                    "CreateBuffer=%llu (last bytes=%u usage=%u bind=%#x cpu=%#x) "
+                    "dropped=%llu invalid=%llu batches=%llu last=%llu; "
                     "original GPU renderer still active\n",
                     static_cast<unsigned long long>(stats.indexed),
                     static_cast<unsigned long long>(stats.indexed_instanced),
                     static_cast<unsigned long long>(stats.buffer_creates),
+                    stats.last_buffer_bytes, stats.last_buffer_usage,
+                    stats.last_buffer_bind_flags, stats.last_buffer_cpu_access,
                     static_cast<unsigned long long>(stats.dropped),
                     static_cast<unsigned long long>(stats.invalid),
                     static_cast<unsigned long long>(stats.batches),
@@ -134,6 +143,14 @@ Stats Snapshot() {
         .indexed_instanced = g_instanced.load(std::memory_order_relaxed),
         .buffer_creates = g_buffer_creates.load(std::memory_order_relaxed),
         .last_buffer_description = g_last_buffer_description.load(std::memory_order_relaxed),
+        .last_buffer_bytes = static_cast<std::uint32_t>(
+            g_last_buffer_head.load(std::memory_order_relaxed)),
+        .last_buffer_usage = static_cast<std::uint32_t>(
+            g_last_buffer_head.load(std::memory_order_relaxed) >> 32),
+        .last_buffer_bind_flags = static_cast<std::uint32_t>(
+            g_last_buffer_tail.load(std::memory_order_relaxed)),
+        .last_buffer_cpu_access = static_cast<std::uint32_t>(
+            g_last_buffer_tail.load(std::memory_order_relaxed) >> 32),
         .dropped = g_dropped.load(std::memory_order_relaxed),
         .batches = g_batches.load(std::memory_order_relaxed),
         .invalid = g_invalid.load(std::memory_order_relaxed),
@@ -147,6 +164,7 @@ void ResetForTest() {
     tlggpu_set_native_js_event_source(nullptr, nullptr);
     g_indexed.store(0); g_instanced.store(0); g_dropped.store(0);
     g_buffer_creates.store(0); g_last_buffer_description.store(0);
+    g_last_buffer_head.store(0); g_last_buffer_tail.store(0);
     g_batches.store(0); g_invalid.store(0);
     g_last_context.store(0); g_last_sequence.store(0);
 }
