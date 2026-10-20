@@ -21,7 +21,8 @@
 
 enum {
     TLG_JS_NATIVE_INDEXED = 1,
-    TLG_JS_NATIVE_INSTANCED = 2
+    TLG_JS_NATIVE_INSTANCED = 2,
+    TLG_JS_NATIVE_CREATE_BUFFER = 3
 };
 
 /* Full 64-bit register values; never dereference game pointers in a capture hook. */
@@ -85,6 +86,36 @@ static inline int tlg_js_native_read_next(const TlgJsNativeRing *ring,
     if (__atomic_load_n(&record->ready, __ATOMIC_ACQUIRE) != wanted) return 0;
     *out = current;
     ++*cursor;
+    return 1;
+}
+
+/* A semantic buffer-creation request is captured before the game has
+ * assigned an output object. Do NOT dereference these guest pointers in the GPU
+ * consumer; they may be stack-local and expire on function return.
+ * The actual native VkBuffer lifetime can only be attached after the resource
+ * constructor's output semantics are fully validated.
+ */
+typedef struct TlgJsNativeBufferCreateCandidate {
+    uint64_t sequence;
+    uint64_t device;
+    uint64_t description;
+    uint64_t initial_data;
+    uint64_t output_object;
+} TlgJsNativeBufferCreateCandidate;
+
+static inline int tlg_js_native_decode_buffer_create(
+    const TlgJsNativeCommand* record,
+    TlgJsNativeBufferCreateCandidate* out) {
+    if (!record || !out ||
+        record->kind != TLG_JS_NATIVE_CREATE_BUFFER || !record->context)
+        return 0;
+    *out = (TlgJsNativeBufferCreateCandidate){
+        .sequence = record->ready,
+        .device = record->context,
+        .description = record->arg0,
+        .initial_data = record->arg1,
+        .output_object = record->arg2,
+    };
     return 1;
 }
 
