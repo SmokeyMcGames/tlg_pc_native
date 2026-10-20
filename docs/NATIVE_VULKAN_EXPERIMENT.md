@@ -72,9 +72,39 @@ python3 -m unittest discover -s tests -p 'test_tlg_patches.py'
 python3 -m unittest discover -s tests -p 'test_native_launcher.py'
 ninja -C out/gpu native-draw-bridge-test
 TLG_NATIVE_DRAW_BRIDGE=1 ./out/gpu/native-draw-bridge-test  # Windows: .exe
+ninja -C out/gpu native-js-bridge-test
+./out/gpu/native-js-bridge-test  # Windows: .exe
 ```
 The test executable does not require the game or a Vulkan device. CI builds
 are necessary but cannot replace actual gameplay validation.
+
+## GPU phase C — verified game-level JsDeviceContext interception
+
+This adds the first **true high-level guest-function interception** instead of
+only observing Gnm helper calls.
+
+- The original, user-provided **v01.00** eboot was disassembled to locate its
+  \`DrawIndexedCommon\` method at guest image offset \`0x1319760\`.
+- Installation requires the matching TITLE_ID and APP_VER 01.00, executable
+  mapping, and an independently checked **31-byte code fingerprint**.
+- The loader replaces the verified 14-byte prologue with an absolute x86-64
+  jump, and replays that original prologue in an executable trampoline.
+- The entry records the guest context pointer and call count; it preserves
+  guest integer registers, XMM arguments, flags, and stack layout. The original
+  method still executes normally.
+- Enable via the launcher checkbox "Capture v1.00 JsDeviceContext calls" or
+  \`TLG_JS_NATIVE_TRACE=1\`. A log line reports draw calls every five seconds,
+  and the runtime exit diagnostics report the final total.
+- A standalone test calls executable, synthetic SysV-ABI game code through the
+  trampoline. It needs no game files and runs on Windows/Linux.
+- **v01.03 interception is disabled** until actual instruction signatures can
+  be independently verified. No guessed v01.03 hook addresses are installed.
+
+**This is not native draw recording yet.** The hook is read-only and still
+chains to the original \`JsDeviceContext\` function, so PM4 encoding continues.
+Before redirecting any call to native Vulkan we must reconstruct shader bindings,
+resources, render targets, barriers and lifetime correctly. Treat it as the
+first safely instrumented interception point, not the complete milestone.
 
 ## Roadmap — full native renderer still required
 
