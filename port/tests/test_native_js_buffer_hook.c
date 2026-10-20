@@ -42,8 +42,15 @@ static void hook_entry(void) {
         "movq %rsi, 24(%r10)\n\t"
         "movq %rdx, 32(%r10)\n\t"
         "movq %rcx, 40(%r10)\n\t"
-        "movq %r8, 48(%r10)\n\t"
-        "movq %r9, 56(%r10)\n\t"
+        "movq $0, 48(%r10)\n\t"
+        "movq $0, 56(%r10)\n\t"
+        "testq %rsi, %rsi\n\t"
+        "jz 1f\n\t"
+        "movq (%rsi), %rax\n\t"
+        "movq %rax, 48(%r10)\n\t"
+        "movq 8(%rsi), %rax\n\t"
+        "movq %rax, 56(%r10)\n\t"
+        "1:\n\t"
         "movq %r11, (%r10)\n\t"
         "popq %r11\n\t"
         "popq %r10\n\t"
@@ -91,7 +98,9 @@ int main(void) {
     };
     memcpy(machine,synthetic,sizeof(synthetic));
     GuestFunction function=(GuestFunction)machine;
-    assert(function((void*)0xabc0,(void*)0x1000,(void*)0x2000,
+    uint32_t first_desc[4] = {4096, 2, 4, 8};
+    uint32_t second_desc[4] = {8192, 3, 16, 32};
+    assert(function((void*)0xabc0,(void*)first_desc,(void*)0x2000,
                     (void*)0x3000,(void*)0x4000,(void*)0x5000)==42);
 
     uint8_t *trampoline=machine+128;
@@ -103,9 +112,9 @@ int main(void) {
     tlg_js_write_absolute_jump(machine,(uintptr_t)hook_entry);
     memset(machine+14,0x90,TLG_JS_CREATE_BUFFER_PROLOGUE_BYTES-14);
     __builtin___clear_cache((char*)machine,(char*)machine+64);
-    assert(function((void*)0xabc0,(void*)0x1000,(void*)0x2000,
+    assert(function((void*)0xabc0,(void*)first_desc,(void*)0x2000,
                     (void*)0x3000,(void*)0x4000,(void*)0x5000)==42);
-    assert(function((void*)0xabc1,(void*)0x1001,(void*)0x2001,
+    assert(function((void*)0xabc1,(void*)second_desc,(void*)0x2001,
                     (void*)0x3001,(void*)0x4001,(void*)0x5001)==42);
     assert(tlg_js_test_create_buffer_calls==2);
 
@@ -114,11 +123,17 @@ int main(void) {
     TlgJsNativeBufferCreateCandidate created;
     assert(tlg_js_native_read_next(&tlg_js_native_ring,&cursor,&cmd,&dropped));
     assert(tlg_js_native_decode_buffer_create(&cmd,&created));
-    assert(created.device==0xabc0 && created.description==0x1000);
+    assert(created.device==0xabc0 &&
+           created.description==(uintptr_t)first_desc);
+    assert(created.byte_width==4096 && created.usage==2);
+    assert(created.bind_flags==4 && created.cpu_access_flags==8);
     assert(created.initial_data==0x2000 && created.output_object==0x3000);
     assert(tlg_js_native_read_next(&tlg_js_native_ring,&cursor,&cmd,&dropped));
     assert(tlg_js_native_decode_buffer_create(&cmd,&created));
-    assert(created.device==0xabc1 && created.description==0x1001);
+    assert(created.device==0xabc1 &&
+           created.description==(uintptr_t)second_desc);
+    assert(created.byte_width==8192 && created.usage==3);
+    assert(created.bind_flags==16 && created.cpu_access_flags==32);
     assert(created.initial_data==0x2001 && created.output_object==0x3001);
     assert(!tlg_js_native_read_next(&tlg_js_native_ring,&cursor,&cmd,&dropped));
     assert(dropped==0);
