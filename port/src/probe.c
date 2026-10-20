@@ -892,22 +892,19 @@ static void tlg_js_create_buffer_entry(void) {
  * structures: these are integer/register observations only. A later native
  * Vulkan backend must still resolve and validate pipeline/resource objects.
  */
-static int tlg_js_native_gpu_poll(void *context, TlgJsNativeDrawCandidate *out,
+static int tlg_js_native_gpu_poll(void *context, TlgJsNativeCommand *out,
                                   uint64_t *dropped_now) {
+    // Single consumer owned by the GPU command thread. Resource events
+    // cannot be filtered out here, because the native resource manager
+    // needs to observe their lifetime before accepting a draw.
     static uint64_t read_cursor, all_dropped;
     const uint64_t previous_drops = all_dropped;
     TlgJsNativeRing *ring = context;
-    TlgJsNativeCommand raw;
     if (dropped_now) *dropped_now = 0;
     if (!ring || !out || !dropped_now) return 0;
-    while (tlg_js_native_read_next(ring, &read_cursor, &raw, &all_dropped)) {
-        if (tlg_js_native_decode_draw(&raw, out)) {
-            *dropped_now = all_dropped - previous_drops;
-            return 1;
-        }
-    }
+    const int have = tlg_js_native_read_next(ring, &read_cursor, out, &all_dropped);
     *dropped_now = all_dropped - previous_drops;
-    return 0;
+    return have;
 }
 
 static void install_js_native_trace(const char *app0, Segment *segments,
@@ -972,7 +969,7 @@ static void install_js_native_trace(const char *app0, Segment *segments,
     memset(image + create_buffer + 14, 0x90,
            TLG_JS_CREATE_BUFFER_PROLOGUE_BYTES - 14);
     tlg_js_trace_enabled = 1;
-    tlggpu_set_native_js_draw_source(tlg_js_native_gpu_poll, &tlg_js_native_ring);
+    tlggpu_set_native_js_event_source(tlg_js_native_gpu_poll, &tlg_js_native_ring);
     runtime_set_report_hook(isa_report_hook);
     printf("Js native bridge: v01.00 DrawIndexedCommon at +0x%llx and "
            "DrawIndexedInstanced at +0x%llx and CreateBuffer at +0x%llx "
