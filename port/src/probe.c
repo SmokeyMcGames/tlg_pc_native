@@ -931,9 +931,9 @@ static void tlg_js_pixel_shader_entry(void) {
         "movq %rsi, 24(%r10)\n\t"
         "movq %rdx, 32(%r10)\n\t"
         "movq %rcx, 40(%r10)\n\t"
-        // Capture the original v1.00 JsBufferDesc fields while the guest
-        // pointer is still live. The guest itself requires this description
-        // and reads [rsi] immediately after the prologue.
+        // Capture the first 16 bytes of the shader source while RSI is live.
+        // This is not enough to reconstruct GCN resource layout or shaders;
+        // never dereference the source pointer later on the GPU thread.
         "movq $0, 48(%r10)\n\t"
         "movq $0, 56(%r10)\n\t"
         "testq %rsi, %rsi\n\t"
@@ -943,7 +943,7 @@ static void tlg_js_pixel_shader_entry(void) {
         "movq 8(%rsi), %rax\n\t"
         "movq %rax, 56(%r10)\n\t"
         "1:\n\t"
-        // Aligned generation published after all descriptor bytes.
+        // Publish the completed shader-header snapshot last.
         "movq %r11, (%r10)\n\t"
         "popq %r11\n\t"
         "popq %r10\n\t"
