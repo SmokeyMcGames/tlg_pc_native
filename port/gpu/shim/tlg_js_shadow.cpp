@@ -6,6 +6,7 @@
 // no Vk draw may execute here until its game-level resource-state model is ready.
 // The consumer does NOT read guest pointers or alter PS4 fence/event semantics.
 #include "tlg_js_shadow.h"
+#include "tlg_js_prepare_match.h"
 #include "../tlggpu.h"
 #include <atomic>
 #include <chrono>
@@ -16,6 +17,8 @@ std::atomic<TlgGpuNativeJsPop> g_pop{nullptr};
 std::atomic<void*> g_user{nullptr};
 std::atomic<TlgGpuNativeJsEventPop> g_event_pop{nullptr};
 std::atomic<void*> g_event_user{nullptr};
+TlgNativeJs::PrepareDrawMatcher g_prepare_matcher;
+std::atomic<std::uint64_t> g_prepared_pairs{0}, g_prepare_resets{0};
 std::atomic<std::uint64_t> g_prepares{0}, g_nonindexed{0}, g_indexed{0}, g_instanced{0}, g_dropped{0};
 std::atomic<std::uint64_t> g_invalid{0}, g_batches{0}, g_last_context{0}, g_last_sequence{0};
 std::atomic<std::uint64_t> g_buffer_creates{0}, g_last_buffer_description{0};
@@ -47,7 +50,8 @@ void PumpOnGpuSubmission() {
     constexpr unsigned MaxPerSubmission = 8192;
     unsigned processed = 0;
     std::uint64_t discarded = 0;
-    std::uint64_t prepares = 0, nonindexed = 0, indexed = 0, instanced = 0, invalid = 0, drops = 0;
+    std::uint64_t prepares = 0, pairs = 0, invalidations = 0;
+    std::uint64_t nonindexed = 0, indexed = 0, instanced = 0, invalid = 0, drops = 0;
     std::uint64_t buffer_creates = 0, last_description = 0;
     std::uint64_t last_head = 0, last_tail = 0;
     std::uint64_t pixel_creates = 0, last_shader_head = 0, last_shader_tail = 0;
@@ -61,6 +65,19 @@ void PumpOnGpuSubmission() {
             if (!event_pop(user, &raw, &discarded)) {
                 drops += discarded;
                 break;
+            }
+            // A dropped event makes previously captured draw context
+            // untrustworthy. Invalidate pending pairings before consuming the
+            // next state event; never join a draw with another frame's state.
+            if (discarded) {
+                g_prepare_matcher.ResetAfterLoss();
+                ++invalidations;
+            }
+            TlgNativeJs::PreparedDrawSnapshot pair{};
+            if (g_prepare_matcher.Observe(raw, pair)) {
+                // Strictly diagnostic. Neither shader slots nor buffer
+                // ownership have been verified; do NOT emit a Vk draw here.
+                ++pairs;
             }
             // The creation event preserves the original pointer arguments.
             // They are opaque and may be invalid after the guest returns;
@@ -145,6 +162,8 @@ void PumpOnGpuSubmission() {
     }
     // Keep the Vulkan command processor off the inter-core atomic hot path:
     // one aggregation per submission instead of one atomic op per game draw.
+    if (pairs) g_prepared_pairs.fetch_add(pairs, std::memory_order_relaxed);
+    if (invalidations) g_prepare_resets.fetch_add(invalidations, std::memory_order_relaxed);
     if (prepares) {
         g_prepares.fetch_add(prepares, std::memory_order_relaxed);
         g_last_prepare_4678.store(prepare_4678, std::memory_order_relaxed);
@@ -177,12 +196,13 @@ void PumpOnGpuSubmission() {
     if (now - last_report >= std::chrono::seconds(5)) {
         last_report = now;
         const auto stats = Snapshot();
-        std::printf("Native Js shadow Vulkan stream: PrepareDraw=%llu nonindexed=%llu indexed=%llu instanced=%llu "
+        std::printf("Native Js shadow Vulkan stream: PrepareDraw=%llu paired=%llu nonindexed=%llu indexed=%llu instanced=%llu "
                     "CreateBuffer=%llu (last bytes=%u usage=%u bind=%#x cpu=%#x) "
                     "CreatePixelShader=%llu "
                     "dropped=%llu invalid=%llu batches=%llu last=%llu; "
                     "original GPU renderer still active\n",
                     static_cast<unsigned long long>(stats.prepare_draws),
+                    static_cast<unsigned long long>(stats.matched_prepare_draws),
                     static_cast<unsigned long long>(stats.nonindexed),
                     static_cast<unsigned long long>(stats.indexed),
                     static_cast<unsigned long long>(stats.indexed_instanced),
@@ -201,6 +221,8 @@ Stats Snapshot() {
     return {
         .nonindexed = g_nonindexed.load(std::memory_order_relaxed),
         .prepare_draws = g_prepares.load(std::memory_order_relaxed),
+        .matched_prepare_draws = g_prepared_pairs.load(std::memory_order_relaxed),
+        .invalidated_preparations = g_prepare_resets.load(std::memory_order_relaxed),
         .shader_slot_4678 = g_last_prepare_4678.load(std::memory_order_relaxed),
         .shader_slot_4680 = g_last_prepare_4680.load(std::memory_order_relaxed),
         .shader_slot_4688 = g_last_prepare_4688.load(std::memory_order_relaxed),
@@ -230,6 +252,8 @@ Stats Snapshot() {
 void ResetForTest() {
     tlggpu_set_native_js_draw_source(nullptr, nullptr);
     tlggpu_set_native_js_event_source(nullptr, nullptr);
+    g_prepare_matcher = TlgNativeJs::PrepareDrawMatcher{};
+    g_prepared_pairs.store(0); g_prepare_resets.store(0);
     g_prepares.store(0);
     g_last_prepare_4678.store(0); g_last_prepare_4680.store(0);
     g_last_prepare_4688.store(0);
