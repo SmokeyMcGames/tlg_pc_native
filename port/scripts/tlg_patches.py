@@ -171,7 +171,7 @@ def identify_build(original, digest, lines):
             if len(candidates) == 1:
                 version = candidates[0]
                 lines.append(f'Frame rate: validated alternate SELF version {version}')
-    if version and elf[:4] != b'\\x7fELF':
+    if version and elf[:4] != b'\x7fELF':
         lines.append('Frame rate: executable is not a decrypted ELF')
         return None, None
     return version, elf
