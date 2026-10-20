@@ -168,6 +168,10 @@ bool TriangleSmoke::RecordOnce() {
     // Vulkan forbids changing an attachment image's layout while another
     // dynamic rendering instance is active. End the guest's current pass first.
     state_->scheduler.EndRendering();
+    if (state_->textured &&
+        !state_->resources.RecordSampledTextureUpload(
+            SmokeTextureId, state_->scheduler))
+        return false;
     if (!state_->resources.RecordColorAttachmentTransition(SmokeTargetId, state_->scheduler) ||
         !state_->resources.RecordIndexReadBarrier(SmokeIndexId, state_->scheduler))
         return false;
@@ -197,10 +201,35 @@ bool TriangleSmoke::RecordOnce() {
     const vk::Pipeline pipeline{raw_pipeline};
     const vk::Buffer indices{raw_indices};
     const TlgNativeVk::Draw draw = resolved.command;
+    vk::PipelineLayout descriptor_layout{};
+    vk::ImageView sampled_view{};
+    vk::Sampler sampled_sampler{};
+    if (state_->textured) {
+        DeviceResources::SampledImageInfo sampled{};
+        std::uint64_t layout = 0;
+        if (!state_->resources.QuerySampledBinding(SmokeTextureId, SmokeSamplerId,
+                                                    sampled) ||
+            !state_->resources.QueryGraphicsPipelineLayout(SmokePipelineId, layout))
+            return false;
+        VkPipelineLayout raw_layout = VK_NULL_HANDLE;
+        VkImageView raw_view = VK_NULL_HANDLE;
+        VkSampler raw_sampler = VK_NULL_HANDLE;
+        static_assert(sizeof(raw_layout) == sizeof(layout));
+        static_assert(sizeof(raw_view) == sizeof(sampled.image_view));
+        static_assert(sizeof(raw_sampler) == sizeof(sampled.sampler));
+        std::memcpy(&raw_layout, &layout, sizeof(raw_layout));
+        std::memcpy(&raw_view, &sampled.image_view, sizeof(raw_view));
+        std::memcpy(&raw_sampler, &sampled.sampler, sizeof(raw_sampler));
+        descriptor_layout = vk::PipelineLayout{raw_layout};
+        sampled_view = vk::ImageView{raw_view};
+        sampled_sampler = vk::Sampler{raw_sampler};
+    }
+    const bool textured = state_->textured;
     const auto color = state_->color_view;
     const auto native_image = vk::Image{state_->color_image};
     const auto staging = vk::Buffer{state_->readback_buffer};
-    state_->scheduler.Record([pipeline,indices,draw,color,native_image,staging]
+    state_->scheduler.Record([pipeline,indices,draw,color,native_image,staging,
+                              descriptor_layout,sampled_view,sampled_sampler,textured]
                               (vk::CommandBuffer cmd) {
         const vk::RenderingAttachmentInfo attachment{
             .imageView=color,
@@ -218,6 +247,31 @@ bool TriangleSmoke::RecordOnce() {
             .pColorAttachments=&attachment,
         };
         cmd.beginRendering(pass);
+        if (textured) {
+            const vk::DescriptorImageInfo image_info{
+                .imageView = sampled_view,
+                .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
+            };
+            const vk::DescriptorImageInfo sampler_info{
+                .sampler = sampled_sampler,
+            };
+            const std::array descriptors{
+                vk::WriteDescriptorSet{
+                    .dstBinding = 0,
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eSampledImage,
+                    .pImageInfo = &image_info,
+                },
+                vk::WriteDescriptorSet{
+                    .dstBinding = 1,
+                    .descriptorCount = 1,
+                    .descriptorType = vk::DescriptorType::eSampler,
+                    .pImageInfo = &sampler_info,
+                },
+            };
+            cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eGraphics,
+                                     descriptor_layout, 0, descriptors);
+        }
         cmd.bindIndexBuffer(indices, 0, vk::IndexType::eUint16);
         cmd.setViewport(0, vk::Viewport{
             .width=float(SmokeSize.width),.height=float(SmokeSize.height),
@@ -300,12 +354,17 @@ bool TriangleSmoke::RecordOnce() {
     const std::uint8_t b = rgba[middle + 2], a = rgba[middle + 3];
     // fs_tri.vert supplies UV ~0.5 at the center; native_triangle.frag
     // outputs (uv.x, uv.y, 0.25, 1). Tolerance allows rasterization rounding.
-    const bool pass = r >= 90 && r <= 165 && g >= 90 && g <= 165 &&
-                      b >= 50 && b <= 85 && a >= 250;
-    std::printf("Native Vulkan registry-indexed triangle GPU readback: %s "
-                "(center RGBA %u,%u,%u,%u; expected roughly 128,128,64,255)\n",
+    const bool pass = state_->textured
+        ? (r >= 10 && r <= 22 && g >= 58 && g <= 70 &&
+           b >= 122 && b <= 134 && a >= 250)
+        : (r >= 90 && r <= 165 && g >= 90 && g <= 165 &&
+           b >= 50 && b <= 85 && a >= 250);
+    std::printf("Native Vulkan %s triangle GPU readback: %s "
+                "(center RGBA %u,%u,%u,%u; expected %s)\n",
+                state_->textured ? "sampled-texture" : "registry-indexed",
                 pass ? "PASS" : "FAIL", unsigned(r), unsigned(g),
-                unsigned(b), unsigned(a));
+                unsigned(b), unsigned(a),
+                state_->textured ? "16,64,128,255" : "128,128,64,255");
     return pass;
 }
 } // namespace TlgNativeVk
