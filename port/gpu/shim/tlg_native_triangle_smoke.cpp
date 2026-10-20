@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "tlg_native_triangle_smoke.h"
 #include "tlg_native_device_resources.h"
+#include "tlg_native_vk_draw.h"
 #include "video_core/host_shaders/fs_tri_vert.h"
 #include "video_core/host_shaders/native_triangle_frag.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -17,6 +18,8 @@ namespace TlgNativeVk {
 namespace {
 constexpr std::uint64_t SmokeTargetId = 0xfffffffffffe1001ull;
 constexpr std::uint64_t SmokePipelineId = 0xfffffffffffe1002ull;
+constexpr std::uint64_t SmokeIndexId = 0xfffffffffffe1003ull;
+constexpr std::uint64_t SmokeContextId = 0xfffffffffffe1004ull;
 constexpr vk::Extent2D SmokeSize{64, 64};
 constexpr vk::Format SmokeFormat = vk::Format::eR8G8B8A8Unorm;
 }
@@ -24,7 +27,7 @@ struct TriangleSmoke::State {
     const Vulkan::Instance& instance;
     Vulkan::Scheduler& scheduler;
     DeviceResources& resources;
-    vk::Pipeline pipeline{}; // owned by DeviceResources, not by the smoke
+    ResourceRegistry& registry;
     vk::ImageView color_view{};
     VkImage color_image = VK_NULL_HANDLE;
     VkBuffer readback_buffer = VK_NULL_HANDLE;
@@ -36,8 +39,9 @@ struct TriangleSmoke::State {
 };
 
 TriangleSmoke::TriangleSmoke(const Vulkan::Instance& instance,
-                              Vulkan::Scheduler& scheduler, DeviceResources& resources)
-    : state_{std::make_unique<State>(instance, scheduler, resources)} {}
+                              Vulkan::Scheduler& scheduler, DeviceResources& resources,
+                              ResourceRegistry& registry)
+    : state_{std::make_unique<State>(instance, scheduler, resources, registry)} {}
 TriangleSmoke::~TriangleSmoke() {
     if (!state_->target_created) return;
     // A deferred Scheduler::Record() closure may not have reached the GPU yet.
@@ -45,7 +49,9 @@ TriangleSmoke::~TriangleSmoke() {
     // This only happens for the opt-in native smoke at teardown.
     state_->scheduler.EndRendering();
     state_->scheduler.Finish();
+    state_->registry.Unbind(SmokeContextId);
     state_->resources.RetireGraphicsPipeline(SmokePipelineId);
+    state_->resources.RetireIndexBuffer(SmokeIndexId);
     if (state_->readback_buffer != VK_NULL_HANDLE) {
         vmaDestroyBuffer(state_->instance.GetAllocator(), state_->readback_buffer,
                          state_->readback_allocation);
@@ -107,13 +113,12 @@ bool TriangleSmoke::Init() {
             SmokePipelineId, FS_TRI_VERT, NATIVE_TRIANGLE_FRAG,
             VK_FORMAT_R8G8B8A8_UNORM))
         return false;
-    std::uint64_t raw_handle = 0;
-    if (!state_->resources.QueryGraphicsPipeline(SmokePipelineId, raw_handle))
+    // A real native index buffer participates in the same resource registry
+    // and GPU read barriers that game-level indexed draws will need.
+    constexpr std::uint16_t indices[]{0, 1, 2};
+    if (!state_->resources.CreateIndexBuffer(SmokeIndexId, 3, 2,
+                                              indices, sizeof(indices)))
         return false;
-    VkPipeline raw_pipeline = VK_NULL_HANDLE;
-    static_assert(sizeof(raw_pipeline) == sizeof(raw_handle));
-    std::memcpy(&raw_pipeline, &raw_handle, sizeof(raw_pipeline));
-    state_->pipeline = vk::Pipeline{raw_pipeline};
     state_->initialized = true;
     return true;
 }
