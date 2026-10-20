@@ -20,6 +20,7 @@
 #include "video_core/texture_cache/texture_cache.h"
 #include "tlg_native_device_resources.h"
 #include "tlg_native_triangle_smoke.h"
+#include "tlg_native_compute_smoke.h"
 
 namespace AmdGpu {
 struct Liverpool;
@@ -524,7 +525,9 @@ private:
     TlgNativeVk::ResourceRegistry native_resource_registry;
     std::unique_ptr<TlgNativeVk::DeviceResources> native_device_resources;
     std::unique_ptr<TlgNativeVk::TriangleSmoke> native_triangle_smoke;
+    std::unique_ptr<TlgNativeVk::ComputeSmoke> native_compute_smoke;
     bool native_triangle_emitted = false;
+    bool native_compute_emitted = false;
     std::unique_ptr<ConstantRing> constant_ring;
     /// Submissions (prepared draws) kept alive until stage B reaches the position.
     std::deque<std::pair<u64, std::shared_ptr<const void>>> pipe_keepalive;
