@@ -536,3 +536,9 @@ add_executable(native-js-prepare-match-test EXCLUDE_FROM_ALL
     ../tests/test_native_js_prepare_match.cpp)
 target_compile_features(native-js-prepare-match-test PRIVATE cxx_std_23)
 target_compile_options(native-js-prepare-match-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+# Source-independent, no-driver Vulkan sampled texture upload preflight.
+add_executable(native-texture-layout-test EXCLUDE_FROM_ALL
+    ../tests/test_native_texture_layout.cpp)
+target_compile_features(native-texture-layout-test PRIVATE cxx_std_23)
+target_compile_options(native-texture-layout-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
