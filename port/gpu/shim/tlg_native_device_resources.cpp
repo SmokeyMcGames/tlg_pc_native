@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "tlg_native_device_resources.h"
 #include "tlg_native_gcn_compiler.h"
+#include "tlg_native_spirv_registry.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include <vk_mem_alloc.h>
@@ -95,6 +96,28 @@ DeviceResources::~DeviceResources() {
         state_->Destroy(*target);
     }
     state_->color_active.clear();
+}
+
+bool DeviceResources::CreateGraphicsPipelineFromCachedSpirv(
+    std::uint64_t guest, const NativeShaderRegistry& cache,
+    const NativeShaderKey& vs_key, const NativeShaderKey& fs_key,
+    std::uint32_t format) {
+    if (!guest || vs_key.stage != NativeShaderStage::Vertex ||
+        fs_key.stage != NativeShaderStage::Fragment ||
+        vs_key.game_binary_hash != fs_key.game_binary_hash ||
+        vs_key.compiler_revision != fs_key.compiler_revision ||
+        vs_key.vk_vendor != fs_key.vk_vendor ||
+        vs_key.vk_device != fs_key.vk_device ||
+        vs_key.vk_driver != fs_key.vk_driver)
+        return false;
+    const auto vs = cache.Find(vs_key);
+    const auto fs = cache.Find(fs_key);
+    if (!vs || !fs)
+        return false;
+    // Each shared_ptr keeps its SPIR-V memory immutable and alive throughout
+    // Vulkan pipeline creation, even if the guest concurrently retires the
+    // underlying shader object.
+    return CreateGraphicsPipeline(guest, vs->spirv, fs->spirv, format);
 }
 
 bool DeviceResources::CreateResourceFreeGraphicsPipelineFromGCN(
