@@ -231,6 +231,23 @@ bool DeviceResources::CreateColorTarget(std::uint64_t guest,
     return true;
 }
 
+bool DeviceResources::QueryColorTarget(std::uint64_t guest,
+                                       ColorTargetInfo& out) const {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->color_active.find(guest);
+    if (it == state_->color_active.end() || !it->second->view)
+        return false;
+    const auto& target = *it->second;
+    out = {
+        .image = Identity(target.gpu),
+        .view = Identity(static_cast<VkImageView>(*target.view)),
+        .width = target.width,
+        .height = target.height,
+        .format = target.format,
+    };
+    return true;
+}
+
 bool DeviceResources::RecordIndexReadBarrier(std::uint64_t guest,
                                              Vulkan::Scheduler& scheduler) {
     VkBuffer handle = VK_NULL_HANDLE;
