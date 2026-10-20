@@ -8,6 +8,8 @@ namespace TlgNativeJs {
 struct Stats {
     std::uint64_t indexed{};
     std::uint64_t indexed_instanced{};
+    std::uint64_t buffer_creates{};
+    std::uint64_t last_buffer_description{};
     std::uint64_t dropped{};
     std::uint64_t batches{};
     std::uint64_t invalid{};
