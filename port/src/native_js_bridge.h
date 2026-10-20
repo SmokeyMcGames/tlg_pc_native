@@ -106,6 +106,38 @@ tlg_js_100_create_buffer_fingerprint[TLG_JS_CREATE_BUFFER_FINGERPRINT_BYTES] = {
  * instruction MUST remain in its original location. Hook only after checking
  * the entire unique 48-byte fingerprint; never infer an offset from v01.03.
  */
+/* v01.00 JsDevice::CreateShaderResourceView at guest+0x13217d0.
+ * Verified entry from its "CreateShaderResourceView" assertion xrefs at
+ * guest+0x1321815 and neighboring instruction cross-references. Capture
+ * only the five opaque original argument registers. Neither RSI nor RDX
+ * is safely dereferenced until game object/view layouts are validated.
+ * First 20 bytes are complete relocation-free prologue instructions.
+ */
+#define TLG_JS_100_CREATE_SRV_ENTRY UINT64_C(0x13217d0)
+#define TLG_JS_CREATE_SRV_PROLOGUE_BYTES 20
+#define TLG_JS_CREATE_SRV_FINGERPRINT_BYTES 48
+#define TLG_JS_CREATE_SRV_TRAMPOLINE_BYTES (TLG_JS_CREATE_SRV_PROLOGUE_BYTES + 14)
+static const uint8_t tlg_js_100_srv_prologue[TLG_JS_CREATE_SRV_PROLOGUE_BYTES] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+    0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81, 0xec,
+    0x48, 0x02, 0x00, 0x00,
+};
+static const uint8_t tlg_js_100_srv_fingerprint[TLG_JS_CREATE_SRV_FINGERPRINT_BYTES] = {
+    0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56,
+    0x41, 0x55, 0x41, 0x54, 0x53, 0x48, 0x81, 0xec,
+    0x48, 0x02, 0x00, 0x00, 0x48, 0x8b, 0x05, 0xd5,
+    0x68, 0x3b, 0x00, 0x49, 0x89, 0xfc, 0x49, 0x89,
+    0xd6, 0x48, 0x89, 0xf3, 0x4d, 0x85, 0xe4, 0x48,
+    0x8b, 0x00, 0x48, 0x89, 0x45, 0xd0, 0x75, 0x7f,
+};
+static inline int tlg_js_100_srv_signature_match(
+    const uint8_t* image, size_t image_size) {
+    const uint64_t at = TLG_JS_100_CREATE_SRV_ENTRY;
+    return image && image_size >= at + TLG_JS_CREATE_SRV_FINGERPRINT_BYTES &&
+           !memcmp(image + at, tlg_js_100_srv_fingerprint,
+                   TLG_JS_CREATE_SRV_FINGERPRINT_BYTES);
+}
+
 #define TLG_JS_100_CREATE_PIXEL_SHADER_ENTRY UINT64_C(0x131e9d0)
 #define TLG_JS_CREATE_PIXEL_SHADER_FINGERPRINT_BYTES 48
 static const uint8_t tlg_js_100_create_pixel_shader_fingerprint
@@ -255,6 +287,17 @@ static inline int tlg_js_build_prepare_draw_trampoline(
     memcpy(out, original, len);
     tlg_js_write_absolute_jump(out + len, continuation);
     return TLG_JS_PREPARE_DRAW_TRAMPOLINE_BYTES;
+}
+static inline int tlg_js_build_srv_trampoline(
+    uint8_t* out, size_t capacity, const uint8_t* original,
+    size_t len, uintptr_t continuation) {
+    if (!out || !original || len != TLG_JS_CREATE_SRV_PROLOGUE_BYTES ||
+        capacity < TLG_JS_CREATE_SRV_TRAMPOLINE_BYTES ||
+        memcmp(original, tlg_js_100_srv_prologue, len))
+        return 0;
+    memcpy(out, original, len);
+    tlg_js_write_absolute_jump(out + len, continuation);
+    return TLG_JS_CREATE_SRV_TRAMPOLINE_BYTES;
 }
 
 #endif
