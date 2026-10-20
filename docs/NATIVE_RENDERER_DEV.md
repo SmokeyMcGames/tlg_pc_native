@@ -19,6 +19,45 @@ the old Gnm/PM4 decoder is still the source of Vulkan resource and shader state.
 - v01.03 high-level entry interception is deliberately disabled: its function
   signatures and guest data layouts have not been independently verified.
 
+### Verified v01.00 draw-call ABI
+
+Disassembly of the original v01.00 executable confirms:
+
+- `JsDeviceContext::DrawIndexedCommon` at guest `0x13198b0`:
+  RSI = index count, RDX = guest index-buffer offset, RCX = vertex base
+  (stored at context + `0x479c`); instance count is one.
+- `JsDeviceContext::DrawIndexedInstanced` at guest `0x1319a00`:
+  RSI = index count, RDX = instance count, RCX = guest index offset,
+  and R8 = vertex base (stored at context + `0x479c`).
+- These methods ultimately generate `sceGnmDrawIndexOffset` calls, with
+  different register assignments. The native semantic decoder now treats
+  those operations separately. The Vulkan binding offset is subtracted
+  from the game's index offset and its remaining capacity checked.
+
+### Actual native Vulkan resource allocation
+
+- `port/gpu/shim/tlg_native_vk_resources.h` tracks opaque Js resource
+  identity, Vulkan handle generations, pipeline/target/index bindings,
+  upload epochs and barrier acknowledgment, with a fail-closed draw check.
+- `port/gpu/shim/tlg_native_device_resources.{h,cpp}` allocates real
+  Vulkan index buffers and 2D color images/views with the port's existing
+  `vk::Device` and Vulkan Memory Allocator. It uploads initial index data,
+  supports updates, and defers physical destruction until GPU work is idle.
+- A hidden opt-in `TLG_NATIVE_DEVICE_RESOURCES=1` initializes this
+  independent resource owner alongside the existing renderer.
+- `TLG_NATIVE_GPU_SMOKE=1` additionally tries a 3-index Vulkan buffer and
+  a 2×2 Vulkan color target and logs allocation success/failure.
+  **This is a GPU memory smoke, not a fully native game rendering test.**
+- New color images start in `VK_IMAGE_LAYOUT_UNDEFINED`. A real Vulkan
+  layout transition and resource binding must be recorded before their
+  registry can acknowledge barrier readiness. No guest texture layout is
+  guessed or used without validation.
+
+Local GCC/Clang C++23 tests of the native resource-registry logic passed.
+The complete Vulkan allocation owner cannot be executed in this environment
+because Vulkan development headers, a Vulkan ICD/device and the game's
+asset archives are not available. No complete Windows game test was run.
+
 ### Vulkan command recording
 
 - `port/gpu/shim/tlg_native_vk_draw.h`: typed, PM4-independent Vulkan
@@ -55,10 +94,14 @@ Pure CPU-side tests are in `port/tests/`:
   into a recording mock, no driver needed
 - `test_native_js_to_vk.cpp`: reject incomplete/foreign Vulkan resources
   and out-of-bounds index ranges before generating a draw
+- `test_native_vk_resources.cpp`: check native Vulkan resource identity,
+  GPU memory generations, guest context ownership, staging write epochs,
+  indexed-buffer offset math and invalidation on object replacement
 
 For a configured native build these are standalone Ninja targets
 `native-js-command-test`, `native-js-shadow-test`,
-`native-vk-draw-test`, and `native-js-to-vk-test`. They do not use
+`native-vk-draw-test`, `native-js-to-vk-test`, and
+`native-vk-resources-test`. They do not use
 shaders, game assets, or graphics-driver initialization.
 
 The Vulkan command encoder and register-capture ring were checked locally
