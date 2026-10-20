@@ -4,6 +4,8 @@
 #include "tlg_native_vk_draw.h"
 #include "video_core/host_shaders/fs_tri_vert.h"
 #include "video_core/host_shaders/native_triangle_frag.h"
+#include "video_core/host_shaders/native_textured_frag.h"
+#include <span>
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -19,6 +21,8 @@ constexpr std::uint64_t SmokeTargetId = 0xfffffffffffe1001ull;
 constexpr std::uint64_t SmokePipelineId = 0xfffffffffffe1002ull;
 constexpr std::uint64_t SmokeIndexId = 0xfffffffffffe1003ull;
 constexpr std::uint64_t SmokeContextId = 0xfffffffffffe1004ull;
+constexpr std::uint64_t SmokeTextureId = 0xfffffffffffe1005ull;
+constexpr std::uint64_t SmokeSamplerId = 0xfffffffffffe1006ull;
 constexpr vk::Extent2D SmokeSize{64, 64};
 }
 struct TriangleSmoke::State {
@@ -26,6 +30,7 @@ struct TriangleSmoke::State {
     Vulkan::Scheduler& scheduler;
     DeviceResources& resources;
     ResourceRegistry& registry;
+    bool textured = false;
     vk::ImageView color_view{};
     VkImage color_image = VK_NULL_HANDLE;
     VkBuffer readback_buffer = VK_NULL_HANDLE;
@@ -38,8 +43,9 @@ struct TriangleSmoke::State {
 
 TriangleSmoke::TriangleSmoke(const Vulkan::Instance& instance,
                               Vulkan::Scheduler& scheduler, DeviceResources& resources,
-                              ResourceRegistry& registry)
-    : state_{std::make_unique<State>(instance, scheduler, resources, registry)} {}
+                              ResourceRegistry& registry, bool texture_test)
+    : state_{std::make_unique<State>(
+          instance, scheduler, resources, registry, texture_test)} {}
 TriangleSmoke::~TriangleSmoke() {
     if (!state_->target_created) return;
     // A deferred Scheduler::Record() closure may not have reached the GPU yet.
@@ -56,6 +62,10 @@ TriangleSmoke::~TriangleSmoke() {
         state_->readback_buffer = VK_NULL_HANDLE;
         state_->readback_allocation = VK_NULL_HANDLE;
         state_->readback_mapped = nullptr;
+    }
+    if (state_->textured) {
+        state_->resources.RetireSampledTexture(SmokeTextureId);
+        state_->resources.RetireSampler(SmokeSamplerId);
     }
     state_->resources.RetireColorTarget(SmokeTargetId);
     state_->resources.CollectRetiredAfterIdle();
@@ -105,11 +115,43 @@ bool TriangleSmoke::Init() {
                            state_->readback_allocation, 0, readback_size) != VK_SUCCESS)
         return false;
 
-    // Build the actual standalone Vulkan pipeline through the independent
-    // native resource owner, without any PM4/GCN shader state or pipeline cache.
-    if (!state_->resources.CreateGraphicsPipeline(
-            SmokePipelineId, FS_TRI_VERT, NATIVE_TRIANGLE_FRAG,
-            VK_FORMAT_R8G8B8A8_UNORM))
+    // Synthetic texture is solid so the expected pixel is invariant under
+    // rasterization coordinates and sampler filtering. All source bytes are
+    // copied immediately into a private Vulkan staging allocation.
+    if (state_->textured) {
+        std::array<std::uint8_t, 4u * 4u * 4u> pixels{};
+        for (std::size_t i = 0; i < pixels.size(); i += 4) {
+            pixels[i] = 16;
+            pixels[i + 1] = 64;
+            pixels[i + 2] = 128;
+            pixels[i + 3] = 255;
+        }
+        if (!state_->resources.CreateSampledTextureRGBA8(
+                SmokeTextureId, 4, 4, pixels.data(), 16, pixels.size()) ||
+            !state_->resources.CreateNearestClampSampler(SmokeSamplerId))
+            return false;
+    }
+    // Build actual standalone Vulkan pipeline through independent native
+    // resource owner, without Gnm/PM4 shader state or pipeline cache.
+    // The textured variant has TWO explicit Vulkan descriptor bindings.
+    constexpr std::array descriptors{
+        NativeDescriptorBinding{
+            .binding = 0, .descriptor_count = 1,
+            .kind = NativeDescriptorKind::SampledImage,
+        },
+        NativeDescriptorBinding{
+            .binding = 1, .descriptor_count = 1,
+            .kind = NativeDescriptorKind::Sampler,
+        },
+    };
+    const bool compiled = state_->textured
+        ? state_->resources.CreateGraphicsPipeline(
+              SmokePipelineId, FS_TRI_VERT, NATIVE_TEXTURED_FRAG,
+              VK_FORMAT_R8G8B8A8_UNORM, descriptors)
+        : state_->resources.CreateGraphicsPipeline(
+              SmokePipelineId, FS_TRI_VERT, NATIVE_TRIANGLE_FRAG,
+              VK_FORMAT_R8G8B8A8_UNORM);
+    if (!compiled)
         return false;
     // A real native index buffer participates in the same resource registry
     // and GPU read barriers that game-level indexed draws will need.
