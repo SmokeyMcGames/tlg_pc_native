@@ -40,6 +40,12 @@ struct DeviceResources::State {
         std::uint64_t index_count = 0;
         std::uint32_t index_width = 0;
     };
+    struct StorageBuffer {
+        VkBuffer gpu = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        void* mapped = nullptr;
+        std::uint64_t bytes = 0;
+    };
     struct GraphicsPipeline {
         vk::UniqueDescriptorSetLayout descriptors{};
         vk::UniquePipelineLayout layout{};
@@ -75,6 +81,8 @@ struct DeviceResources::State {
     std::vector<std::unique_ptr<GraphicsPipeline>> pipelines_retired;
     std::unordered_map<std::uint64_t, Buffer> active;
     std::vector<Buffer> retired;
+    std::unordered_map<std::uint64_t, StorageBuffer> storage_active;
+    std::vector<StorageBuffer> storage_retired;
     std::unordered_map<std::uint64_t, std::unique_ptr<ColorTarget>> color_active;
     std::vector<std::unique_ptr<ColorTarget>> color_retired;
     std::unordered_map<std::uint64_t, std::unique_ptr<SampledTexture>> sampled_textures;
@@ -102,6 +110,11 @@ struct DeviceResources::State {
         image.gpu = VK_NULL_HANDLE;
         image.allocation = VK_NULL_HANDLE;
     }
+    void Destroy(StorageBuffer& b) {
+        if (b.gpu != VK_NULL_HANDLE)
+            vmaDestroyBuffer(allocator, b.gpu, b.allocation);
+        b = {};
+    }
     void Destroy(Buffer& b) {
         if (b.gpu != VK_NULL_HANDLE)
             vmaDestroyBuffer(allocator, b.gpu, b.allocation);
@@ -122,6 +135,11 @@ DeviceResources::~DeviceResources() {
         state_->Destroy(buffer);
     }
     state_->active.clear();
+    for (auto& [id, buffer] : state_->storage_active) {
+        state_->registry.UnregisterStorageBuffer(id);
+        state_->Destroy(buffer);
+    }
+    state_->storage_active.clear();
     for (auto& [id, pipeline] : state_->pipelines) {
         state_->registry.UnregisterPipeline(id);
         pipeline.reset();
@@ -600,6 +618,132 @@ void DeviceResources::RetireGraphicsPipeline(std::uint64_t guest) {
     state_->pipelines.erase(it);
 }
 
+bool DeviceResources::CreateStorageBuffer(
+    std::uint64_t guest, const void* source, std::uint64_t bytes) {
+    if (!guest || !source || !bytes || bytes > MaxNativeIndexBuffer)
+        return false;
+    const VkBufferCreateInfo ci{
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+        .size = bytes,
+        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                 VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    const VmaAllocationCreateInfo alloc_ci{
+        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
+                 VMA_ALLOCATION_CREATE_MAPPED_BIT |
+                 VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
+        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
+    };
+    State::StorageBuffer native{};
+    VmaAllocationInfo alloc_info{};
+    if (vmaCreateBuffer(state_->allocator, &ci, &alloc_ci, &native.gpu,
+                        &native.allocation, &alloc_info) != VK_SUCCESS)
+        return false;
+    native.mapped = alloc_info.pMappedData;
+    native.bytes = bytes;
+    if (!native.mapped) {
+        state_->Destroy(native);
+        return false;
+    }
+    std::memcpy(native.mapped, source, static_cast<std::size_t>(bytes));
+    if (vmaFlushAllocation(state_->allocator, native.allocation, 0, bytes) != VK_SUCCESS) {
+        state_->Destroy(native);
+        return false;
+    }
+    std::scoped_lock lock{state_->mutex};
+    if (!state_->registry.RegisterStorageBuffer(guest, Identity(native.gpu), bytes)) {
+        state_->Destroy(native);
+        return false;
+    }
+    if (auto it = state_->storage_active.find(guest);
+        it != state_->storage_active.end()) {
+        state_->storage_retired.push_back(it->second);
+        it->second = native;
+    } else {
+        state_->storage_active.emplace(guest, native);
+    }
+    // Each new allocation begins unready and has its own generation.
+    return true;
+}
+
+bool DeviceResources::RecordStorageBufferHostWriteBarrier(
+    std::uint64_t guest, Vulkan::Scheduler& scheduler) {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->storage_active.find(guest);
+    if (it == state_->storage_active.end() || !it->second.bytes ||
+        !it->second.mapped)
+        return false;
+    const vk::BufferMemoryBarrier2 host_to_shader{
+        .srcStageMask = vk::PipelineStageFlagBits2::eHost,
+        .srcAccessMask = vk::AccessFlagBits2::eHostWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eVertexShader |
+                        vk::PipelineStageFlagBits2::eFragmentShader |
+                        vk::PipelineStageFlagBits2::eComputeShader,
+        .dstAccessMask = vk::AccessFlagBits2::eShaderRead |
+                         vk::AccessFlagBits2::eShaderWrite,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .buffer = vk::Buffer{it->second.gpu},
+        .offset = 0,
+        .size = it->second.bytes,
+    };
+    scheduler.Record([host_to_shader](vk::CommandBuffer cmd) {
+        const vk::DependencyInfo barrier{
+            .bufferMemoryBarrierCount = 1,
+            .pBufferMemoryBarriers = &host_to_shader,
+        };
+        cmd.pipelineBarrier2(barrier);
+    });
+    // Submission-order acknowledgment, not CPU completion of the shader.
+    return state_->registry.MarkStorageBufferReady(
+        guest, Identity(it->second.gpu));
+}
+
+bool DeviceResources::QueryStorageBuffer(
+    std::uint64_t guest, StorageBufferInfo& out) const {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->storage_active.find(guest);
+    if (it == state_->storage_active.end() || !it->second.gpu)
+        return false;
+    ResourceRegistry::StorageBufferIdentity registered{};
+    if (!state_->registry.TryResolveStorageBuffer(guest, registered) ||
+        registered.vk_handle != Identity(it->second.gpu) ||
+        registered.capacity_bytes != it->second.bytes)
+        return false;
+    out = {registered.vk_handle, registered.capacity_bytes,
+           registered.generation};
+    return true;
+}
+
+bool DeviceResources::ReadStorageBufferAfterGpuIdle(
+    std::uint64_t guest, void* destination,
+    std::uint64_t destination_bytes) const {
+    if (!destination)
+        return false;
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->storage_active.find(guest);
+    if (it == state_->storage_active.end() || !it->second.mapped ||
+        destination_bytes < it->second.bytes)
+        return false;
+    if (vmaInvalidateAllocation(state_->allocator, it->second.allocation,
+                                0, VK_WHOLE_SIZE) != VK_SUCCESS)
+        return false;
+    std::memcpy(destination, it->second.mapped,
+                static_cast<std::size_t>(it->second.bytes));
+    return true;
+}
+
+void DeviceResources::RetireStorageBuffer(std::uint64_t guest) {
+    std::scoped_lock lock{state_->mutex};
+    const auto it = state_->storage_active.find(guest);
+    if (it == state_->storage_active.end()) return;
+    state_->registry.UnregisterStorageBuffer(guest);
+    state_->storage_retired.push_back(it->second);
+    state_->storage_active.erase(it);
+}
+
 bool DeviceResources::CreateIndexBuffer(std::uint64_t id, std::uint64_t count,
                                         std::uint32_t width, const void* source,
                                         std::size_t nbytes) {
@@ -1048,7 +1192,7 @@ bool DeviceResources::QuerySampledBinding(
 // must match an independently captured guest generation and a ready Vulkan
 // allocation. This does not inspect PS4 shader registers or PM4 commands.
 // Call on the GPU submission owner before the draw/dispatch that consumes it.
-bool DeviceResources::RecordNativeImageDescriptors(
+bool DeviceResources::RecordNativeDescriptors(
     std::uint64_t pipeline_id, NativePipelineKind pipeline_kind,
     std::span<const NativeGuestDescriptorBinding> assignments,
     Vulkan::Scheduler& scheduler) {
@@ -1061,6 +1205,7 @@ bool DeviceResources::RecordNativeImageDescriptors(
         std::uint32_t binding = 0;
         vk::DescriptorType type{};
         std::vector<vk::DescriptorImageInfo> images{};
+        std::vector<vk::DescriptorBufferInfo> buffers{};
     };
 
     // Keep one lock order: device resources -> identity registry. The callback
@@ -1091,15 +1236,34 @@ bool DeviceResources::RecordNativeImageDescriptors(
         case NativeDescriptorKind::Sampler:
             write.type = vk::DescriptorType::eSampler;
             break;
+        case NativeDescriptorKind::StorageBuffer:
+            write.type = vk::DescriptorType::eStorageBuffer;
+            break;
         default:
-            // Storage buffers, storage images, and unknown resource types
-            // require their own native owner and synchronization path.
+            // Storage images or unknown layouts are never guessed.
             return false;
         }
         write.images.reserve(assignment.resources.size());
+        write.buffers.reserve(assignment.resources.size());
         for (const auto& requested : assignment.resources) {
             ResourceRegistry::SampledIdentity identity{};
-            if (assignment.kind == NativeDescriptorKind::SampledImage) {
+            if (assignment.kind == NativeDescriptorKind::StorageBuffer) {
+                ResourceRegistry::StorageBufferIdentity storage{};
+                const auto it_buffer = state_->storage_active.find(requested.guest_id);
+                if (it_buffer == state_->storage_active.end() ||
+                    !it_buffer->second.gpu || !it_buffer->second.bytes ||
+                    !state_->registry.TryResolveStorageBuffer(
+                        requested.guest_id, storage) ||
+                    storage.generation != requested.generation ||
+                    storage.vk_handle != Identity(it_buffer->second.gpu) ||
+                    storage.capacity_bytes != it_buffer->second.bytes)
+                    return false;
+                write.buffers.push_back(vk::DescriptorBufferInfo{
+                    .buffer = vk::Buffer{it_buffer->second.gpu},
+                    .offset = 0,
+                    .range = it_buffer->second.bytes,
+                });
+            } else if (assignment.kind == NativeDescriptorKind::SampledImage) {
                 const auto texture = state_->sampled_textures.find(requested.guest_id);
                 if (texture == state_->sampled_textures.end() ||
                     !texture->second->view ||
@@ -1146,7 +1310,10 @@ bool DeviceResources::RecordNativeImageDescriptors(
                 .dstBinding = resource.binding,
                 .descriptorCount = static_cast<std::uint32_t>(resource.images.size()),
                 .descriptorType = resource.type,
-                .pImageInfo = resource.images.data(),
+                .pImageInfo = resource.images.empty()
+                    ? nullptr : resource.images.data(),
+                .pBufferInfo = resource.buffers.empty()
+                    ? nullptr : resource.buffers.data(),
             });
         }
         cmd.pushDescriptorSetKHR(bind_point, layout, 0, writes);
@@ -1364,6 +1531,8 @@ void DeviceResources::CollectRetiredAfterIdle() {
     std::scoped_lock lock{state_->mutex};
     for (auto& b : state_->retired) state_->Destroy(b);
     state_->retired.clear();
+    for (auto& b : state_->storage_retired) state_->Destroy(b);
+    state_->storage_retired.clear();
     for (auto& image : state_->color_retired) state_->Destroy(*image);
     state_->color_retired.clear();
     state_->pipelines_retired.clear();

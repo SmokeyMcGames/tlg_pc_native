@@ -95,6 +95,26 @@ int main() {
 
     // Native sampled images are explicitly unavailable until a GPU
     // transfer + shader-read layout barrier has been recorded.
+    ResourceRegistry::StorageBufferIdentity storage{};
+    assert(!gpu.TryResolveStorageBuffer(0xb01,storage));
+    assert(!gpu.RegisterStorageBuffer(0,100,64));
+    assert(!gpu.RegisterStorageBuffer(0xb01,100,0));
+    assert(gpu.RegisterStorageBuffer(0xb01,100,64));
+    assert(!gpu.TryResolveStorageBuffer(0xb01,storage));
+    assert(!gpu.MarkStorageBufferReady(0xb01,999));
+    assert(gpu.MarkStorageBufferReady(0xb01,100));
+    assert(gpu.TryResolveStorageBuffer(0xb01,storage));
+    assert(storage.vk_handle==100 && storage.capacity_bytes==64);
+    const auto first_storage_generation=storage.generation;
+    assert(gpu.RegisterStorageBuffer(0xb01,200,128));
+    assert(!gpu.TryResolveStorageBuffer(0xb01,storage));
+    assert(gpu.MarkStorageBufferReady(0xb01,200));
+    assert(gpu.TryResolveStorageBuffer(0xb01,storage));
+    assert(storage.vk_handle==200 && storage.capacity_bytes==128 &&
+           storage.generation>first_storage_generation);
+    gpu.UnregisterStorageBuffer(0xb01);
+    assert(!gpu.TryResolveStorageBuffer(0xb01,storage));
+
     ResourceRegistry::SampledBinding sampled{};
     assert(!gpu.TryResolveSampledBinding(0x901,0x902,sampled));
     ResourceRegistry::SampledIdentity native_identity{};

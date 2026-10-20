@@ -99,6 +99,23 @@ public:
     bool QueryComputePipelineLayout(std::uint64_t guest_id,
                                     std::uint64_t& vk_layout) const;
 
+    // Independent, host-staged storage buffer allocation. Data is copied
+    // immediately; no game memory is retained. A real host->shader barrier
+    // must be recorded before it can appear in a native descriptor set.
+    bool CreateStorageBuffer(std::uint64_t guest_id, const void* source,
+                             std::uint64_t source_bytes);
+    bool RecordStorageBufferHostWriteBarrier(std::uint64_t guest_id,
+                                             Vulkan::Scheduler& scheduler);
+    struct StorageBufferInfo {
+        std::uint64_t vk_buffer = 0, capacity_bytes = 0, generation = 0;
+    };
+    bool QueryStorageBuffer(std::uint64_t guest_id, StorageBufferInfo& out) const;
+    // Call only after this scheduler's GPU work and shader->host barrier have
+    // completed. No invalidation or guest-address translation is attempted.
+    bool ReadStorageBufferAfterGpuIdle(std::uint64_t guest_id, void* destination,
+                                       std::uint64_t destination_bytes) const;
+    void RetireStorageBuffer(std::uint64_t guest_id);
+
     bool CreateIndexBuffer(std::uint64_t guest_id, std::uint64_t index_count,
                            std::uint32_t index_width, const void* initial_data,
                            std::size_t initial_bytes);
@@ -153,12 +170,11 @@ public:
     bool QuerySampledBinding(std::uint64_t texture_id, std::uint64_t sampler_id,
                              SampledImageInfo& result) const;
 
-    // The GPU submission owner records complete sampled-image/sampler
-    // descriptors into the existing Vulkan scheduler. Each guest resource
-    // must match the exact current generation of the pipeline's reflected
-    // descriptor layout. Unsupported storage buffers/images are rejected;
-    // a validated layout alone never makes game-owned resources drawable.
-    bool RecordNativeImageDescriptors(
+    // The GPU submission owner records complete sampled-image/sampler/
+    // storage-buffer descriptors on the Vulkan scheduler. Every resource
+    // must match its current generation and reflected pipeline layout.
+    // Storage images remain unsupported; no native game draw is enabled.
+    bool RecordNativeDescriptors(
         std::uint64_t pipeline_id, NativePipelineKind pipeline_kind,
         std::span<const NativeGuestDescriptorBinding> assignments,
         Vulkan::Scheduler& scheduler);

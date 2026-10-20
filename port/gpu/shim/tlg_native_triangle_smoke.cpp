@@ -270,7 +270,7 @@ bool TriangleSmoke::RecordOnce() {
                 .resources = {{SmokeSamplerId, sampled.sampler_generation}},
             },
         }};
-        if (!state_->resources.RecordNativeImageDescriptors(
+        if (!state_->resources.RecordNativeDescriptors(
                 SmokePipelineId, NativePipelineKind::Graphics,
                 assignments, state_->scheduler))
             return false;

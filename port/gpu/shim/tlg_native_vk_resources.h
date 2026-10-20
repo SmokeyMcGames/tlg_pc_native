@@ -80,6 +80,41 @@ public:
                              std::uint64_t indices) {
         return indices && Register(buffers_, guest, vk_handle, indices);
     }
+    // Host-owned native storage buffers live in a different identity table
+    // from index buffers. A replaced guest buffer invalidates all old native
+    // descriptor generations, even when the opaque guest address is reused.
+    bool RegisterStorageBuffer(std::uint64_t guest, std::uint64_t vk_handle,
+                               std::uint64_t capacity_bytes) {
+        return capacity_bytes && Register(storage_buffers_, guest, vk_handle,
+                                          capacity_bytes);
+    }
+    void UnregisterStorageBuffer(std::uint64_t guest) {
+        Remove(storage_buffers_, guest);
+    }
+    bool MarkStorageBufferReady(std::uint64_t guest, std::uint64_t expected_buffer) {
+        std::scoped_lock lock{mutex_};
+        auto it = storage_buffers_.find(guest);
+        if (it == storage_buffers_.end() || !expected_buffer ||
+            it->second.vk_handle != expected_buffer)
+            return false;
+        it->second.shader_readable = true;
+        return true;
+    }
+    struct StorageBufferIdentity {
+        std::uint64_t vk_handle = 0;
+        std::uint64_t generation = 0;
+        std::uint64_t capacity_bytes = 0;
+    };
+    bool TryResolveStorageBuffer(std::uint64_t guest,
+                                 StorageBufferIdentity& out) const {
+        std::scoped_lock lock{mutex_};
+        const auto it = storage_buffers_.find(guest);
+        if (it == storage_buffers_.end() || !it->second.shader_readable ||
+            !it->second.vk_handle || !it->second.capacity)
+            return false;
+        out = {it->second.vk_handle, it->second.generation, it->second.capacity};
+        return true;
+    }
     bool RegisterTargetSet(std::uint64_t guest, std::uint64_t vk_handle) {
         return Register(targets_, guest, vk_handle, 0);
     }
@@ -350,7 +385,7 @@ private:
     }
     mutable std::mutex mutex_;
     std::uint64_t generation_ = 0;
-    Table pipelines_, buffers_, targets_, sampled_images_, samplers_;
+    Table pipelines_, buffers_, storage_buffers_, targets_, sampled_images_, samplers_;
     std::unordered_map<std::uint64_t, NativeContextState> contexts_;
 };
 } // namespace TlgNativeVk

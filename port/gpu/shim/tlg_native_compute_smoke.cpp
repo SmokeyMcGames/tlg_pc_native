@@ -6,18 +6,17 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
-#include <vk_mem_alloc.h>
 #include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <span>
 
 namespace TlgNativeVk {
 namespace {
 constexpr std::uint32_t SmokeWords = 4;
 constexpr VkDeviceSize SmokeBytes = SmokeWords * sizeof(std::uint32_t);
 constexpr std::uint64_t SmokeComputeId = 0xfffffffffffd1001ull;
+constexpr std::uint64_t SmokeStorageId = 0xfffffffffffd1002ull;
 }
 struct ComputeSmoke::State {
     State(const Vulkan::Instance& inst, Vulkan::Scheduler& sched,
@@ -31,9 +30,7 @@ struct ComputeSmoke::State {
     vk::Pipeline pipeline{}; // borrowed, owned by DeviceResources
     vk::PipelineLayout layout{}; // borrowed, owned by DeviceResources
     bool pipeline_created = false;
-    VkBuffer buffer = VK_NULL_HANDLE;
-    VmaAllocation allocation = VK_NULL_HANDLE;
-    void* mapped = nullptr;
+    bool buffer_created = false;
     bool initialized = false;
     bool attempted = false;
 };
@@ -43,50 +40,33 @@ ComputeSmoke::ComputeSmoke(const Vulkan::Instance& instance, Vulkan::Scheduler& 
     : state_{std::make_unique<State>(instance, scheduler, resources, registry)} {}
 
 ComputeSmoke::~ComputeSmoke() {
-    if (state_->buffer == VK_NULL_HANDLE) return;
-    // Shader and storage buffer are not released until deferred recording has
-    // reached a completed Vulkan submission; only the opt-in smoke waits here.
+    if (!state_->buffer_created && !state_->pipeline_created) return;
+    // Drain deferred commands before retiring any native Vulkan allocation.
     state_->scheduler.EndRendering();
     state_->scheduler.Finish();
-    if (state_->pipeline_created) {
+    if (state_->pipeline_created)
         state_->device_resources.RetireComputePipeline(SmokeComputeId);
-        state_->device_resources.CollectRetiredAfterIdle();
-    }
-    vmaDestroyBuffer(state_->instance.GetAllocator(), state_->buffer,
-                     state_->allocation);
+    if (state_->buffer_created)
+        state_->device_resources.RetireStorageBuffer(SmokeStorageId);
+    state_->device_resources.CollectRetiredAfterIdle();
 }
 
 bool ComputeSmoke::Init() {
     if (state_->initialized) return true;
-    if (state_->buffer != VK_NULL_HANDLE) return false;
+    if (state_->buffer_created) return false;
     if (state_->instance.MaxPushDescriptors() < 1) {
         std::puts("Native Vulkan compute smoke: push descriptors unsupported");
         return false;
     }
-    const VkBufferCreateInfo ci{
-        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = SmokeBytes,
-        .usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                 VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
-                 VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    // The native Vulkan owner stages bytes now and assigns a new identity.
+    const std::array<std::uint8_t, SmokeBytes> source{
+        0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5,
+        0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5,
     };
-    const VmaAllocationCreateInfo alloc_ci{
-        .flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT |
-                 VMA_ALLOCATION_CREATE_MAPPED_BIT |
-                 VMA_ALLOCATION_CREATE_WITHIN_BUDGET_BIT,
-        .usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST,
-    };
-    VmaAllocationInfo alloc_info{};
-    if (vmaCreateBuffer(state_->instance.GetAllocator(), &ci, &alloc_ci,
-                        &state_->buffer, &state_->allocation, &alloc_info) != VK_SUCCESS)
+    if (!state_->device_resources.CreateStorageBuffer(
+            SmokeStorageId, source.data(), source.size()))
         return false;
-    state_->mapped = alloc_info.pMappedData;
-    if (!state_->mapped) return false;
-    std::memset(state_->mapped, 0xa5, SmokeBytes);
-    if (vmaFlushAllocation(state_->instance.GetAllocator(),
-                           state_->allocation, 0, SmokeBytes) != VK_SUCCESS)
-        return false;
+    state_->buffer_created = true;
 
     // Create and register the REAL VkComputePipeline through the same
     // independent owner and type-safe ResourceRegistry used for future
@@ -125,23 +105,31 @@ bool ComputeSmoke::RecordAndVerifyOnce() {
     state_->attempted = true;
     state_->scheduler.EndRendering(); // graphics pass must end before compute
 
+    if (!state_->device_resources.RecordStorageBufferHostWriteBarrier(
+            SmokeStorageId, state_->scheduler))
+        return false;
+    DeviceResources::StorageBufferInfo storage{};
+    if (!state_->device_resources.QueryStorageBuffer(SmokeStorageId, storage) ||
+        storage.capacity_bytes != SmokeBytes)
+        return false;
+    const std::array<NativeGuestDescriptorBinding, 1> bound{{
+        NativeGuestDescriptorBinding{
+            .binding = 0,
+            .kind = NativeDescriptorKind::StorageBuffer,
+            .resources = {{SmokeStorageId, storage.generation}},
+        },
+    }};
+    if (!state_->device_resources.RecordNativeDescriptors(
+            SmokeComputeId, NativePipelineKind::Compute,
+            bound, state_->scheduler))
+        return false;
+
+    VkBuffer raw_buffer = VK_NULL_HANDLE;
+    static_assert(sizeof(raw_buffer) == sizeof(storage.vk_buffer));
+    std::memcpy(&raw_buffer, &storage.vk_buffer, sizeof(raw_buffer));
+    const vk::Buffer gpu_buffer{raw_buffer};
     const auto pipeline = state_->pipeline;
-    const auto layout = state_->layout;
-    const vk::Buffer gpu_buffer{state_->buffer};
-    state_->scheduler.Record([pipeline,layout,gpu_buffer](vk::CommandBuffer cmd) {
-        const vk::DescriptorBufferInfo info{
-            .buffer = gpu_buffer,
-            .offset = 0,
-            .range = SmokeBytes,
-        };
-        const vk::WriteDescriptorSet write{
-            .dstBinding = 0,
-            .descriptorCount = 1,
-            .descriptorType = vk::DescriptorType::eStorageBuffer,
-            .pBufferInfo = &info,
-        };
-        cmd.pushDescriptorSetKHR(vk::PipelineBindPoint::eCompute,
-                                 layout, 0, std::span{&write, std::size_t{1}});
+    state_->scheduler.Record([pipeline,gpu_buffer](vk::CommandBuffer cmd) {
         TlgNativeVk::EmitComputeDispatch(cmd, vk::PipelineBindPoint::eCompute,
                                          pipeline, TlgNativeVk::Dispatch{1,1,1});
         const vk::BufferMemoryBarrier2 to_cpu{
@@ -165,10 +153,10 @@ bool ComputeSmoke::RecordAndVerifyOnce() {
     // Optional one-shot verification only; do not enable for normal gameplay
     // until the asynchronous native compute scheduling path is complete.
     state_->scheduler.Finish();
-    if (vmaInvalidateAllocation(state_->instance.GetAllocator(),
-                                state_->allocation, 0, VK_WHOLE_SIZE) != VK_SUCCESS)
+    std::array<std::uint32_t, SmokeWords> words{};
+    if (!state_->device_resources.ReadStorageBufferAfterGpuIdle(
+            SmokeStorageId, words.data(), sizeof(words)))
         return false;
-    const auto* words = static_cast<const std::uint32_t*>(state_->mapped);
     bool pass = true;
     for (unsigned i = 0; i < SmokeWords; ++i)
         pass = pass && (words[i] == 0x4e415400u + 7u * i);

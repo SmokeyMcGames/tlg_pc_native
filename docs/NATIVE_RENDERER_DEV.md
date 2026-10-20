@@ -407,12 +407,18 @@ layout and every sampled-image/sampler handle against its native resource
 registry. It records `vkCmdPushDescriptorSetKHR` using owned image-descriptor
 snapshots on the Vulkan scheduler, with no PM4 decoding or guest pointers
 held by the recording thread. Shader-readable texture transitions must already
-be recorded on the same scheduler. Storage images and storage buffers remain
-unsupported and are explicitly rejected.
+be recorded on the same scheduler. Storage images remain unsupported and are explicitly rejected.
+Storage buffers are supported only when created and synchronized by the
+independent native buffer owner.
 
 The opt-in textured, microtiled and macrotiled native offscreen triangle
 tests now use this shared binding function instead of hardcoded descriptor
-writes. The CPU-only `native-descriptor-bindings-test` verifies the guest
+writes. Native host-visible storage buffers have an independent allocator,
+registry generation, host-write-to-shader Vulkan barrier, and post-GPU
+readback path. The synthetic compute smoke now uses those same owned storage
+buffers and shared descriptor recording instead of an untracked private VMA
+buffer. Storage-buffer writes after initial allocation and guest memory
+aliasing are not yet modeled. The CPU-only `native-descriptor-bindings-test` verifies the guest
 object count, layout shape and nonzero generations. Actual GPU/Windows execution
 is **not yet verified**, and this does not capture real game descriptors.
 
