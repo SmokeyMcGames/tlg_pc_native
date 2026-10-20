@@ -473,3 +473,8 @@ target_include_directories(native-draw-bridge-test PRIVATE shim)
 if(WIN32)
     target_link_libraries(native-draw-bridge-test PRIVATE synchronization)
 endif()
+
+# Phase-one native JsDeviceContext entry bridge regression.
+add_executable(native-js-bridge-test EXCLUDE_FROM_ALL ../tests/test_native_js_bridge.c)
+target_compile_features(native-js-bridge-test PRIVATE c_std_11)
+target_compile_options(native-js-bridge-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
