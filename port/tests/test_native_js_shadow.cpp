@@ -29,7 +29,9 @@ struct EventFixture {
     unsigned next = 0;
     TlgJsNativeCommand commands[3] = {
         {.ready=1, .kind=TLG_JS_NATIVE_CREATE_BUFFER,
-         .context=0x111, .arg0=0x222, .arg1=0x333, .arg2=0x444},
+         .context=0x111, .arg0=0x222, .arg1=0x333, .arg2=0x444,
+         .arg3=(std::uint64_t{2} << 32) | 4096,
+         .arg4=(std::uint64_t{8} << 32) | 4},
         {.ready=2, .kind=TLG_JS_NATIVE_INDEXED,
          .context=0x555, .arg0=36, .arg1=8, .arg2=4},
         {.ready=3, .kind=TLG_JS_NATIVE_INSTANCED,
@@ -71,6 +73,10 @@ int main() {
     assert(native.indexed_instanced == 1);
     assert(native.buffer_creates == 1);
     assert(native.last_buffer_description == 0x222);
+    assert(native.last_buffer_bytes == 4096);
+    assert(native.last_buffer_usage == 2);
+    assert(native.last_buffer_bind_flags == 4);
+    assert(native.last_buffer_cpu_access == 8);
     assert(native.invalid == 0);
     assert(native.last_sequence == 3);
     TlgNativeJs::ResetForTest();
