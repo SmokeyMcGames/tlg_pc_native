@@ -488,3 +488,7 @@ add_executable(native-js-shadow-test EXCLUDE_FROM_ALL
     ../tests/test_native_js_shadow.cpp shim/tlg_js_shadow.cpp)
 target_compile_features(native-js-shadow-test PRIVATE cxx_std_23)
 target_compile_options(native-js-shadow-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+
+add_executable(native-js-to-vk-test EXCLUDE_FROM_ALL ../tests/test_native_js_to_vk.cpp)
+target_compile_features(native-js-to-vk-test PRIVATE cxx_std_23)
+target_compile_options(native-js-to-vk-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
