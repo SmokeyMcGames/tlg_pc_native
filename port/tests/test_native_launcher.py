@@ -41,6 +41,16 @@ class GpuLauncherTests(unittest.TestCase):
         self.assertEqual(env['TLG_NATIVE_DRAW_BRIDGE'], '1')
         self.assertEqual(env['TLG_NATIVE_COMPUTE_RECIPES'], '1')
 
+    def test_verified_js_hook_opt_in_is_independent(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            env = tlg_run.build_env(self.settings(native_js_trace=True))
+        self.assertEqual(env['TLG_JS_NATIVE_TRACE'], '1')
+        self.assertNotIn('TLG_NATIVE_DRAW_BRIDGE', env)
+        self.assertNotIn('TLG_NATIVE_COMPUTE_RECIPES', env)
+        with mock.patch.dict(os.environ, {'TLG_JS_NATIVE_TRACE': '0'}, clear=True):
+            override = tlg_run.build_env(self.settings(native_js_trace=True))
+        self.assertEqual(override['TLG_JS_NATIVE_TRACE'], '0')
+
     def test_executable_version_hints_are_hash_pinned(self):
         import tlg_patches
         with tempfile.TemporaryDirectory() as root:
