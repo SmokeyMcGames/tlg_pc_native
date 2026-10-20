@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "tlg_native_compute_smoke.h"
+#include "tlg_native_device_resources.h"
 #include "tlg_native_vk_draw.h"
 #include "video_core/host_shaders/native_storage_comp.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
@@ -16,15 +17,20 @@ namespace TlgNativeVk {
 namespace {
 constexpr std::uint32_t SmokeWords = 4;
 constexpr VkDeviceSize SmokeBytes = SmokeWords * sizeof(std::uint32_t);
+constexpr std::uint64_t SmokeComputeId = 0xfffffffffffd1001ull;
 }
 struct ComputeSmoke::State {
-    explicit State(const Vulkan::Instance& inst, Vulkan::Scheduler& sched)
-        : instance(inst), scheduler(sched) {}
+    State(const Vulkan::Instance& inst, Vulkan::Scheduler& sched,
+          DeviceResources& owner, ResourceRegistry& resources)
+        : instance(inst), scheduler(sched), device_resources(owner),
+          registry(resources) {}
     const Vulkan::Instance& instance;
     Vulkan::Scheduler& scheduler;
-    vk::UniqueDescriptorSetLayout descriptors{};
-    vk::UniquePipelineLayout layout{};
-    vk::UniquePipeline pipeline{};
+    DeviceResources& device_resources;
+    ResourceRegistry& registry;
+    vk::Pipeline pipeline{}; // borrowed, owned by DeviceResources
+    vk::PipelineLayout layout{}; // borrowed, owned by DeviceResources
+    bool pipeline_created = false;
     VkBuffer buffer = VK_NULL_HANDLE;
     VmaAllocation allocation = VK_NULL_HANDLE;
     void* mapped = nullptr;
@@ -32,8 +38,9 @@ struct ComputeSmoke::State {
     bool attempted = false;
 };
 
-ComputeSmoke::ComputeSmoke(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler)
-    : state_{std::make_unique<State>(instance, scheduler)} {}
+ComputeSmoke::ComputeSmoke(const Vulkan::Instance& instance, Vulkan::Scheduler& scheduler,
+                           DeviceResources& resources, ResourceRegistry& registry)
+    : state_{std::make_unique<State>(instance, scheduler, resources, registry)} {}
 
 ComputeSmoke::~ComputeSmoke() {
     if (state_->buffer == VK_NULL_HANDLE) return;
@@ -41,9 +48,10 @@ ComputeSmoke::~ComputeSmoke() {
     // reached a completed Vulkan submission; only the opt-in smoke waits here.
     state_->scheduler.EndRendering();
     state_->scheduler.Finish();
-    state_->pipeline.reset();
-    state_->layout.reset();
-    state_->descriptors.reset();
+    if (state_->pipeline_created) {
+        state_->device_resources.RetireComputePipeline(SmokeComputeId);
+        state_->device_resources.CollectRetiredAfterIdle();
+    }
     vmaDestroyBuffer(state_->instance.GetAllocator(), state_->buffer,
                      state_->allocation);
 }
@@ -80,42 +88,34 @@ bool ComputeSmoke::Init() {
                            state_->allocation, 0, SmokeBytes) != VK_SUCCESS)
         return false;
 
-    const auto device = state_->instance.GetDevice();
-    const vk::DescriptorSetLayoutBinding storage_binding{
+    // Create and register the REAL VkComputePipeline through the same
+    // independent owner and type-safe ResourceRegistry used for future
+    // native JsComputeContext dispatches.
+    constexpr NativeDescriptorBinding resource_binding{
         .binding = 0,
-        .descriptorType = vk::DescriptorType::eStorageBuffer,
-        .descriptorCount = 1,
-        .stageFlags = vk::ShaderStageFlagBits::eCompute,
+        .descriptor_count = 1,
+        .kind = NativeDescriptorKind::StorageBuffer,
     };
-    const vk::DescriptorSetLayoutCreateInfo set_info{
-        .flags = vk::DescriptorSetLayoutCreateFlagBits::ePushDescriptorKHR,
-        .bindingCount = 1,
-        .pBindings = &storage_binding,
-    };
-    auto [set_result, desc] = device.createDescriptorSetLayoutUnique(set_info);
-    if (set_result != vk::Result::eSuccess) return false;
-    state_->descriptors = std::move(desc);
-    const vk::DescriptorSetLayout set_layout = *state_->descriptors;
-    const vk::PipelineLayoutCreateInfo layout_ci{
-        .setLayoutCount = 1,
-        .pSetLayouts = &set_layout,
-    };
-    auto [layout_result, layout] = device.createPipelineLayoutUnique(layout_ci);
-    if (layout_result != vk::Result::eSuccess) return false;
-    state_->layout = std::move(layout);
-
-    const auto shader = Vulkan::CompileSPV(NATIVE_STORAGE_COMP, device);
-    if (!shader) return false;
-    const vk::PipelineShaderStageCreateInfo stage{
-        .stage = vk::ShaderStageFlagBits::eCompute,
-        .module = shader,
-        .pName = "main",
-    };
-    auto [pipeline_result, pipeline] = device.createComputePipelineUnique(
-        {}, vk::ComputePipelineCreateInfo{.stage = stage, .layout = *state_->layout});
-    device.destroyShaderModule(shader);
-    if (pipeline_result != vk::Result::eSuccess) return false;
-    state_->pipeline = std::move(pipeline);
+    const std::array bindings{resource_binding};
+    if (!state_->device_resources.CreateComputePipeline(
+            SmokeComputeId, NATIVE_STORAGE_COMP, bindings))
+        return false;
+    state_->pipeline_created = true;
+    std::uint64_t pipeline_handle = 0, layout_handle = 0;
+    std::uint64_t registered_handle = 0;
+    if (!state_->device_resources.QueryComputePipeline(SmokeComputeId, pipeline_handle) ||
+        !state_->device_resources.QueryComputePipelineLayout(SmokeComputeId, layout_handle) ||
+        !state_->registry.LookupComputePipeline(SmokeComputeId, registered_handle) ||
+        registered_handle != pipeline_handle)
+        return false;
+    VkPipeline raw_pipeline = VK_NULL_HANDLE;
+    VkPipelineLayout raw_layout = VK_NULL_HANDLE;
+    static_assert(sizeof(raw_pipeline) == sizeof(pipeline_handle));
+    static_assert(sizeof(raw_layout) == sizeof(layout_handle));
+    std::memcpy(&raw_pipeline, &pipeline_handle, sizeof(raw_pipeline));
+    std::memcpy(&raw_layout, &layout_handle, sizeof(raw_layout));
+    state_->pipeline = vk::Pipeline{raw_pipeline};
+    state_->layout = vk::PipelineLayout{raw_layout};
     state_->initialized = true;
     return true;
 }
@@ -125,8 +125,8 @@ bool ComputeSmoke::RecordAndVerifyOnce() {
     state_->attempted = true;
     state_->scheduler.EndRendering(); // graphics pass must end before compute
 
-    const auto pipeline = *state_->pipeline;
-    const auto layout = *state_->layout;
+    const auto pipeline = state_->pipeline;
+    const auto layout = state_->layout;
     const vk::Buffer gpu_buffer{state_->buffer};
     state_->scheduler.Record([pipeline,layout,gpu_buffer](vk::CommandBuffer cmd) {
         const vk::DescriptorBufferInfo info{
