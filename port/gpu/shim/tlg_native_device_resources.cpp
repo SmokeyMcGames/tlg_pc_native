@@ -666,6 +666,33 @@ bool DeviceResources::UpdateIndexBuffer(std::uint64_t id, std::uint64_t first,
     return true;
 }
 
+bool DeviceResources::CreateSampledTexture2DMacroRgba8(
+    std::uint64_t guest, std::uint32_t width, std::uint32_t height,
+    std::uint32_t tiled_pitch, std::uint32_t tiled_height,
+    std::uint32_t bank_swizzle, Rgba8MacroTiling mode,
+    const void* source, std::uint64_t available_bytes) {
+    MacroRgba8Layout layout{};
+    if (!guest || !Validate2DMacroRgba8(
+            width, height, tiled_pitch, tiled_height, bank_swizzle,
+            available_bytes, source, mode, layout))
+        return false;
+    // CPU reference conversion for a narrow verified 2D GCN layout. Source
+    // guest memory is never dereferenced by the GPU thread after return.
+    // A later Vulkan compute detiler should replace the extra host allocation
+    // for larger textures; correctness and exact addressability come first.
+    try {
+        std::vector<std::uint8_t> linear(
+            static_cast<std::size_t>(layout.visible.total_bytes));
+        Detile2DMacroRgba8(linear.data(), source, layout);
+        return CreateSampledTextureRGBA8(
+            guest, layout.visible.width, layout.visible.height,
+            linear.data(), layout.visible.row_bytes,
+            static_cast<std::uint64_t>(linear.size()));
+    } catch (const std::bad_alloc&) {
+        return false; // preserve the guest's existing renderer on OOM
+    }
+}
+
 bool DeviceResources::CreateSampledTexture1DTiledRgba8(
     std::uint64_t guest, std::uint32_t width, std::uint32_t height,
     std::uint32_t tiled_pitch, std::uint32_t tiled_height,
