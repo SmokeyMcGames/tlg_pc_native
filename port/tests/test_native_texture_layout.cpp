@@ -27,7 +27,9 @@ int main() {
     assert(!ValidateLinearRgba8(2,0,16,32,pitched.data(),layout));
     assert(!ValidateLinearRgba8(8193,2,32800,70000,pitched.data(),layout));
     assert(!ValidateLinearRgba8(2,2,16,32,nullptr,layout));
-    assert(!ValidateLinearRgba8(8000,8000,32000,
+    // Tight 8000x8000 (256,000,000 bytes) fits the 256 MiB cap;
+    // the padded 40,000-byte row pitch does not.
+    assert(!ValidateLinearRgba8(8000,8000,40000,
                                 0xffffffffffffffffull,pitched.data(),layout));
     // Declared data size is NOT trusted as a pointer permission: source gets
     // dereferenced only after all size checks and only for the valid 2x2 input.
