@@ -38,6 +38,14 @@ public:
                            std::uint32_t height, std::uint32_t vk_format);
     void RetireColorTarget(std::uint64_t guest_id);
 
+    struct ColorTargetInfo {
+        std::uint64_t image = 0, view = 0;
+        std::uint32_t width = 0, height = 0, format = 0;
+    };
+    // Native Vulkan GPU-thread-only handle lookup. These handles remain owned
+    // by DeviceResources; callers must not destroy or retain them after retire.
+    bool QueryColorTarget(std::uint64_t guest_id, ColorTargetInfo& out) const;
+
     // Record native Vulkan synchronization (same GPU scheduler/queue as the
     // game's presentation path), independent of PS4 PM4 packet decoding.
     // The caller may acknowledge resource readiness only AFTER all required
