@@ -81,7 +81,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     const bool compute = native_compute && native_compute[0] == '1' && !native_compute[1];
     if (!EmulatorSettings.IsNullGPU() &&
         ((native_resources && native_resources[0] == '1' && !native_resources[1]) ||
-         smoke || triangle)) {
+         smoke || triangle || compute)) {
         native_device_resources =
             std::make_unique<TlgNativeVk::DeviceResources>(instance, native_resource_registry);
         if (smoke) {
@@ -112,7 +112,7 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
     }
     if (compute && !EmulatorSettings.IsNullGPU()) {
         native_compute_smoke = std::make_unique<TlgNativeVk::ComputeSmoke>(
-            instance, scheduler);
+            instance, scheduler, *native_device_resources, native_resource_registry);
         if (!native_compute_smoke->Init()) {
             std::puts("Native Vulkan compute smoke: pipeline/resource initialization FAILED");
             native_compute_smoke.reset();
