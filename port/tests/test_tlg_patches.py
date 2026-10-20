@@ -73,7 +73,7 @@ class FrameRatePatchTests(unittest.TestCase):
         for mode, expected_count in [('60', 4), ('unlocked', 1)]:
             with self.subTest(mode=mode):
                 applied, lines, blob = self.prepare(
-                    self_dump(text_with(t.MODES[mode], profile=profile)), mode)
+                    self_dump(text_with(t.MODES['60'], profile=profile)), mode)
                 self.assertEqual(applied, mode)
                 self.assertEqual(struct.unpack_from('<8sQQ', blob),
                                  (b'G3PATCH2', 0, expected_count))
