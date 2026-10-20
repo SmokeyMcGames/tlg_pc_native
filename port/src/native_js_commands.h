@@ -90,8 +90,10 @@ static inline int tlg_js_native_read_next(const TlgJsNativeRing *ring,
 }
 
 /* A semantic buffer-creation request is captured before the game has
- * assigned an output object. Do NOT dereference these guest pointers in the GPU
- * consumer; they may be stack-local and expire on function return.
+ * assigned an output object. The last 16 bytes of the event are an immediate
+ * JsBufferDesc snapshot from RSI, not the unused R8/R9 argument registers.
+ * Do NOT dereference raw guest pointers in the GPU consumer; they may be
+ * stack-local and expire on function return.
  * The actual native VkBuffer lifetime can only be attached after the resource
  * constructor's output semantics are fully validated.
  */
@@ -101,6 +103,12 @@ typedef struct TlgJsNativeBufferCreateCandidate {
     uint64_t description;
     uint64_t initial_data;
     uint64_t output_object;
+    uint64_t description_head; /* first 8 bytes at entry */
+    uint64_t description_tail; /* next 8 bytes at entry */
+    uint32_t byte_width;       /* JsBufferDesc+0x00 */
+    uint32_t usage;            /* JsBufferDesc+0x04, still guest-defined */
+    uint32_t bind_flags;       /* JsBufferDesc+0x08, still guest-defined */
+    uint32_t cpu_access_flags; /* JsBufferDesc+0x0c */
 } TlgJsNativeBufferCreateCandidate;
 
 static inline int tlg_js_native_decode_buffer_create(
@@ -114,6 +122,12 @@ static inline int tlg_js_native_decode_buffer_create(
     out->description = record->arg0;
     out->initial_data = record->arg1;
     out->output_object = record->arg2;
+    out->description_head = record->arg3;
+    out->description_tail = record->arg4;
+    out->byte_width = (uint32_t)record->arg3;
+    out->usage = (uint32_t)(record->arg3 >> 32);
+    out->bind_flags = (uint32_t)record->arg4;
+    out->cpu_access_flags = (uint32_t)(record->arg4 >> 32);
     return 1;
 }
 
