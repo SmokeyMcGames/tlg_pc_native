@@ -188,6 +188,14 @@ private:
                   NativePipelineKind pipeline_kind = NativePipelineKind::None) {
         if (!guest || !handle) return false;
         std::scoped_lock lock{mutex_};
+        if (pipeline_kind != NativePipelineKind::None) {
+            if (auto previous = table.find(guest); previous != table.end() &&
+                previous->second.pipeline_kind != pipeline_kind) {
+                // A guest shader identity cannot silently change VkPipeline
+                // bind point; graphics and compute object lifetimes differ.
+                return false;
+            }
+        }
         table[guest] = {handle, ++generation_, capacity, 0, pipeline_kind};
         return true;
     }
