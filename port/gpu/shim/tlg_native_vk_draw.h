@@ -41,4 +41,18 @@ void EmitGraphicsDraw(CommandBuffer buffer, BindPoint bind_point,
         emit();
     }
 }
+struct Dispatch {
+    std::uint32_t group_x = 1;
+    std::uint32_t group_y = 1;
+    std::uint32_t group_z = 1;
+};
+
+// Pure Vulkan command emission from already-validated shader/resource bindings.
+// Never assumes PM4 register ownership, GCN ABI or PS4 command lifetimes.
+template<class CommandBuffer, class Pipeline, class BindPoint>
+void EmitComputeDispatch(CommandBuffer buffer, BindPoint bind_point,
+                         Pipeline pipeline, const Dispatch& dispatch) {
+    buffer.bindPipeline(bind_point, pipeline);
+    buffer.dispatch(dispatch.group_x, dispatch.group_y, dispatch.group_z);
+}
 } // namespace TlgNativeVk
