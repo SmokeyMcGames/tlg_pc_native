@@ -4,6 +4,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include <vk_mem_alloc.h>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
 #include <mutex>
@@ -34,6 +35,10 @@ struct DeviceResources::State {
         std::uint64_t index_count = 0;
         std::uint32_t index_width = 0;
     };
+    struct GraphicsPipeline {
+        vk::UniquePipelineLayout layout{};
+        vk::UniquePipeline pipeline{};
+    };
     struct ColorTarget {
         VkImage gpu = VK_NULL_HANDLE;
         VmaAllocation allocation = VK_NULL_HANDLE;
@@ -44,6 +49,8 @@ struct DeviceResources::State {
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
     };
     std::mutex mutex;
+    std::unordered_map<std::uint64_t, std::unique_ptr<GraphicsPipeline>> pipelines;
+    std::vector<std::unique_ptr<GraphicsPipeline>> pipelines_retired;
     std::unordered_map<std::uint64_t, Buffer> active;
     std::vector<Buffer> retired;
     std::unordered_map<std::uint64_t, std::unique_ptr<ColorTarget>> color_active;
@@ -77,11 +84,122 @@ DeviceResources::~DeviceResources() {
         state_->Destroy(buffer);
     }
     state_->active.clear();
+    for (auto& [id, pipeline] : state_->pipelines) {
+        state_->registry.UnregisterPipeline(id);
+        pipeline.reset();
+    }
+    state_->pipelines.clear();
     for (auto& [id, target] : state_->color_active) {
         state_->registry.UnregisterTargetSet(id);
         state_->Destroy(*target);
     }
     state_->color_active.clear();
+}
+
+bool DeviceResources::CreateGraphicsPipeline(
+    std::uint64_t guest, std::span<const std::uint32_t> vertex_spirv,
+    std::span<const std::uint32_t> fragment_spirv, std::uint32_t color_format) {
+    if (!guest || color_format == VK_FORMAT_UNDEFINED ||
+        vertex_spirv.size() < 5 || fragment_spirv.size() < 5 ||
+        vertex_spirv.size() > (1u << 20) || fragment_spirv.size() > (1u << 20) ||
+        vertex_spirv[0] != 0x07230203 || fragment_spirv[0] != 0x07230203)
+        return false;
+
+    const auto device = state_->instance.GetDevice();
+    auto [vs_result, vs] = device.createShaderModuleUnique({
+        .codeSize = vertex_spirv.size_bytes(), .pCode = vertex_spirv.data(),
+    });
+    if (vs_result != vk::Result::eSuccess) return false;
+    auto [fs_result, fs] = device.createShaderModuleUnique({
+        .codeSize = fragment_spirv.size_bytes(), .pCode = fragment_spirv.data(),
+    });
+    if (fs_result != vk::Result::eSuccess) return false;
+
+    auto resource = std::make_unique<State::GraphicsPipeline>();
+    auto [layout_result, layout] =
+        device.createPipelineLayoutUnique(vk::PipelineLayoutCreateInfo{});
+    if (layout_result != vk::Result::eSuccess) return false;
+    resource->layout = std::move(layout);
+
+    const std::array stages{
+        vk::PipelineShaderStageCreateInfo{
+            .stage = vk::ShaderStageFlagBits::eVertex, .module = *vs, .pName = "main",
+        },
+        vk::PipelineShaderStageCreateInfo{
+            .stage = vk::ShaderStageFlagBits::eFragment, .module = *fs, .pName = "main",
+        },
+    };
+    const auto format = static_cast<vk::Format>(color_format);
+    const vk::PipelineRenderingCreateInfo rendering{
+        .colorAttachmentCount = 1, .pColorAttachmentFormats = &format,
+    };
+    const vk::PipelineVertexInputStateCreateInfo vertex_input{};
+    const vk::PipelineInputAssemblyStateCreateInfo input{
+        .topology = vk::PrimitiveTopology::eTriangleList,
+    };
+    const vk::PipelineViewportStateCreateInfo viewport{
+        .viewportCount = 1, .scissorCount = 1,
+    };
+    const vk::PipelineRasterizationStateCreateInfo raster{
+        .polygonMode = vk::PolygonMode::eFill,
+        .cullMode = vk::CullModeFlagBits::eNone,
+        .frontFace = vk::FrontFace::eCounterClockwise,
+        .lineWidth = 1.0f,
+    };
+    const vk::PipelineMultisampleStateCreateInfo samples{
+        .rasterizationSamples = vk::SampleCountFlagBits::e1,
+    };
+    const vk::PipelineColorBlendAttachmentState color{
+        .colorWriteMask = vk::ColorComponentFlagBits::eR |
+                          vk::ColorComponentFlagBits::eG |
+                          vk::ColorComponentFlagBits::eB |
+                          vk::ColorComponentFlagBits::eA,
+    };
+    const vk::PipelineColorBlendStateCreateInfo blend{
+        .attachmentCount = 1, .pAttachments = &color,
+    };
+    const std::array dynamic_states{
+        vk::DynamicState::eViewport, vk::DynamicState::eScissor,
+    };
+    const vk::PipelineDynamicStateCreateInfo dynamic{
+        .dynamicStateCount = static_cast<std::uint32_t>(dynamic_states.size()),
+        .pDynamicStates = dynamic_states.data(),
+    };
+    auto [result, pipeline] = device.createGraphicsPipelineUnique(
+        {}, vk::GraphicsPipelineCreateInfo{
+            .pNext = &rendering,
+            .stageCount = static_cast<std::uint32_t>(stages.size()),
+            .pStages = stages.data(),
+            .pVertexInputState = &vertex_input,
+            .pInputAssemblyState = &input,
+            .pViewportState = &viewport,
+            .pRasterizationState = &raster,
+            .pMultisampleState = &samples,
+            .pColorBlendState = &blend,
+            .pDynamicState = &dynamic,
+            .layout = *resource->layout,
+        });
+    if (result != vk::Result::eSuccess) return false;
+    resource->pipeline = std::move(pipeline);
+    const std::uint64_t handle = Identity(static_cast<VkPipeline>(*resource->pipeline));
+    std::scoped_lock lock{state_->mutex};
+    if (!state_->registry.RegisterPipeline(guest, handle)) return false;
+    if (auto old = state_->pipelines.find(guest); old != state_->pipelines.end()) {
+        state_->pipelines_retired.push_back(std::move(old->second));
+        old->second = std::move(resource);
+    } else {
+        state_->pipelines.emplace(guest, std::move(resource));
+    }
+    return true;
+}
+
+void DeviceResources::RetireGraphicsPipeline(std::uint64_t guest) {
+    std::scoped_lock lock{state_->mutex};
+    auto it = state_->pipelines.find(guest);
+    if (it == state_->pipelines.end()) return;
+    state_->registry.UnregisterPipeline(guest);
+    state_->pipelines_retired.push_back(std::move(it->second));
+    state_->pipelines.erase(it);
 }
 
 bool DeviceResources::CreateIndexBuffer(std::uint64_t id, std::uint64_t count,
@@ -396,5 +514,6 @@ void DeviceResources::CollectRetiredAfterIdle() {
     state_->retired.clear();
     for (auto& image : state_->color_retired) state_->Destroy(*image);
     state_->color_retired.clear();
+    state_->pipelines_retired.clear();
 }
 } // namespace TlgNativeVk
