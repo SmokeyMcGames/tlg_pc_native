@@ -1,0 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Native Vulkan verification only: independent of PS4 Gnm/PM4 shaders.
+#version 450
+layout(local_size_x = 4, local_size_y = 1, local_size_z = 1) in;
+layout(set = 0, binding = 0, std430) buffer ResultBuffer {
+    uint results[4];
+} output_buffer;
+
+void main() {
+    const uint index = gl_LocalInvocationID.x;
+    output_buffer.results[index] = 0x4E415400u + index * 7u;
+}
