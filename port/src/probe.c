@@ -55,6 +55,7 @@ static uintptr_t guest_code_end; /* end of the image and its stub areas (emulati
 extern volatile uint64_t tlg_js_trace_indexed_calls;
 extern volatile uint64_t tlg_js_trace_draw_calls;
 extern volatile uint64_t tlg_js_trace_prepare_draw_calls;
+extern volatile uint64_t tlg_js_trace_srv_create_calls;
 extern volatile uint64_t tlg_js_trace_instanced_calls;
 extern volatile uint64_t tlg_js_trace_buffer_create_calls;
 extern volatile uint64_t tlg_js_trace_pixel_shader_create_calls;
@@ -71,11 +72,12 @@ static int tlg_js_trace_enabled;
  */
 void tlg_js_trace_report_tick(uint64_t now_ms) {
     if (!tlg_js_trace_enabled) return;
-    static uint64_t last_ms, last_count, last_instanced, last_buffers, last_pixels, last_draws, last_prepares;
+    static uint64_t last_ms, last_count, last_instanced, last_buffers, last_pixels, last_draws, last_prepares, last_srvs;
     if (last_ms && now_ms - last_ms < 5000) return;
     const uint64_t calls = __atomic_load_n(&tlg_js_trace_indexed_calls, __ATOMIC_RELAXED);
     const uint64_t draws = __atomic_load_n(&tlg_js_trace_draw_calls, __ATOMIC_RELAXED);
     const uint64_t prepares = __atomic_load_n(&tlg_js_trace_prepare_draw_calls, __ATOMIC_RELAXED);
+    const uint64_t srvs = __atomic_load_n(&tlg_js_trace_srv_create_calls, __ATOMIC_RELAXED);
     const uint64_t instanced = __atomic_load_n(&tlg_js_trace_instanced_calls, __ATOMIC_RELAXED);
     const uint64_t buffers = __atomic_load_n(&tlg_js_trace_buffer_create_calls, __ATOMIC_RELAXED);
     const uint64_t pixels = __atomic_load_n(&tlg_js_trace_pixel_shader_create_calls, __ATOMIC_RELAXED);
@@ -105,6 +107,11 @@ void tlg_js_trace_report_tick(uint64_t now_ms) {
         printf("Js native bridge: PrepareDraw +%llu / 5s (total %llu)\n",
                (unsigned long long)(prepares - last_prepares),
                (unsigned long long)prepares);
+    if (last_ms && srvs != last_srvs)
+        printf("Js native bridge: CreateShaderResourceView +%llu / 5s (total %llu)\n",
+               (unsigned long long)(srvs - last_srvs),
+               (unsigned long long)srvs);
+    last_srvs = srvs;
     last_prepares = prepares;
     last_draws = draws;
     last_ms = now_ms;
@@ -785,6 +792,8 @@ static void install_stat_multipliers(const char *app0, Segment *segments, uint64
  * A 14-byte absolute jump replaces only a verified, relocation-free prologue.
  */
 #if defined(__x86_64__)
+__attribute__((used)) uintptr_t tlg_js_srv_gateway;
+__attribute__((used)) volatile uint64_t tlg_js_trace_srv_create_calls;
 __attribute__((used)) uintptr_t tlg_js_prepare_draw_gateway;
 __attribute__((used)) volatile uint64_t tlg_js_trace_prepare_draw_calls;
 __attribute__((used)) uintptr_t tlg_js_draw_gateway;
@@ -1042,6 +1051,42 @@ static void tlg_js_pixel_shader_entry(void) {
     );
 }
 
+/* Verified v01.00 JsDevice::CreateShaderResourceView: opaque argument capture.
+ * Do not dereference guest image/view metadata on the GPU thread.
+ */
+__attribute__((naked, used, noinline))
+static void tlg_js_srv_entry(void) {
+    __asm__ volatile(
+        "pushfq\n\t"
+        "pushq %rax\n\t"
+        "pushq %r10\n\t"
+        "pushq %r11\n\t"
+        "lock incq tlg_js_trace_srv_create_calls(%rip)\n\t"
+        "leaq tlg_js_native_ring(%rip), %r10\n\t"
+        "movq $1, %rax\n\t"
+        "lock xaddq %rax, (%r10)\n\t"
+        "leaq 1(%rax), %r11\n\t"
+        "andq $4095, %rax\n\t"
+        "shlq $6, %rax\n\t"
+        "addq $64, %r10\n\t"
+        "addq %rax, %r10\n\t"
+        "movq $0, (%r10)\n\t"
+        "movq $7, 8(%r10)\n\t"
+        "movq %rdi, 16(%r10)\n\t"
+        "movq %rsi, 24(%r10)\n\t"
+        "movq %rdx, 32(%r10)\n\t"
+        "movq %rcx, 40(%r10)\n\t"
+        "movq %r8, 48(%r10)\n\t"
+        "movq %r9, 56(%r10)\n\t"
+        "movq %r11, (%r10)\n\t"
+        "popq %r11\n\t"
+        "popq %r10\n\t"
+        "popq %rax\n\t"
+        "popfq\n\t"
+        "jmp *tlg_js_srv_gateway(%rip)\n\t"
+    );
+}
+
 /* GPU-thread consumer for semantic Js calls. It copies no guest-owned
  * structures: these are integer/register observations only. A later native
  * Vulkan backend must still resolve and validate pipeline/resource objects.
@@ -1082,7 +1127,8 @@ static void install_js_native_trace(const char *app0, Segment *segments,
     const uint64_t instanced = TLG_JS_100_INSTANCED_ENTRY;
     const uint64_t create_buffer = TLG_JS_100_CREATE_BUFFER_ENTRY;
     const uint64_t pixel_shader = TLG_JS_100_CREATE_PIXEL_SHADER_ENTRY;
-    /* Atomic feature-level policy: validate all six signatures before writing.
+    const uint64_t srv = TLG_JS_100_CREATE_SRV_ENTRY;
+    /* Atomic feature-level policy: validate all seven signatures before writing.
      * An unexpected game build leaves all guest code byte-for-byte intact. */
     if (!mapped(segments, count, prepare,
                 TLG_JS_PREPARE_DRAW_FINGERPRINT_BYTES) ||
@@ -1093,16 +1139,19 @@ static void install_js_native_trace(const char *app0, Segment *segments,
                 TLG_JS_CREATE_BUFFER_FINGERPRINT_BYTES) ||
         !mapped(segments, count, pixel_shader,
                 TLG_JS_CREATE_PIXEL_SHADER_FINGERPRINT_BYTES) ||
+        !mapped(segments, count, srv,
+                TLG_JS_CREATE_SRV_FINGERPRINT_BYTES) ||
         !tlg_js_100_prepare_draw_signature_match(image, size) ||
         !tlg_js_100_draw_signature_match(image, size) ||
         !tlg_js_100_signature_match(image, size) ||
         !tlg_js_100_instanced_signature_match(image, size) ||
         !tlg_js_100_create_buffer_signature_match(image, size) ||
-        !tlg_js_100_pixel_shader_signature_match(image, size)) {
+        !tlg_js_100_pixel_shader_signature_match(image, size) ||
+        !tlg_js_100_srv_signature_match(image, size)) {
         puts("Js native bridge: v01.00 draw/creation signature mismatch; no hooks installed");
         return;
     }
-    if (page_size < 768) {
+    if (page_size < 896) {
         puts("Js native bridge: unexpected page size, hooks disabled");
         return;
     }
@@ -1128,7 +1177,11 @@ static void install_js_native_trace(const char *app0, Segment *segments,
         !tlg_js_build_prepare_draw_trampoline(
             trampolines + 640, page_size - 640, image + prepare,
             TLG_JS_PREPARE_DRAW_PROLOGUE_BYTES,
-            (uintptr_t)(image + prepare + TLG_JS_PREPARE_DRAW_PROLOGUE_BYTES))) {
+            (uintptr_t)(image + prepare + TLG_JS_PREPARE_DRAW_PROLOGUE_BYTES)) ||
+        !tlg_js_build_srv_trampoline(
+            trampolines + 768, page_size - 768, image + srv,
+            TLG_JS_CREATE_SRV_PROLOGUE_BYTES,
+            (uintptr_t)(image + srv + TLG_JS_CREATE_SRV_PROLOGUE_BYTES))) {
         puts("Js native bridge: failed to construct verified trampolines; hooks disabled");
         return;
     }
@@ -1139,6 +1192,7 @@ static void install_js_native_trace(const char *app0, Segment *segments,
     tlg_js_pixel_shader_gateway = (uintptr_t)(trampolines + 384);
     tlg_js_draw_gateway = (uintptr_t)(trampolines + 512);
     tlg_js_prepare_draw_gateway = (uintptr_t)(trampolines + 640);
+    tlg_js_srv_gateway = (uintptr_t)(trampolines + 768);
     __atomic_thread_fence(__ATOMIC_RELEASE);
     tlg_js_write_absolute_jump(image + indexed, (uintptr_t)tlg_js_indexed_entry);
     tlg_js_write_absolute_jump(image + instanced, (uintptr_t)tlg_js_instanced_entry);
@@ -1158,18 +1212,22 @@ static void install_js_native_trace(const char *app0, Segment *segments,
                                (uintptr_t)tlg_js_prepare_draw_entry);
     memset(image + prepare + 14, 0x90,
            TLG_JS_PREPARE_DRAW_PROLOGUE_BYTES - 14);
+    tlg_js_write_absolute_jump(image + srv, (uintptr_t)tlg_js_srv_entry);
+    memset(image + srv + 14, 0x90, TLG_JS_CREATE_SRV_PROLOGUE_BYTES - 14);
     tlg_js_trace_enabled = 1;
     tlggpu_set_native_js_event_source(tlg_js_native_gpu_poll, &tlg_js_native_ring);
     runtime_set_report_hook(isa_report_hook);
     printf("Js native bridge: v01.00 DrawIndexedCommon at +0x%llx and "
            "DrawIndexedInstanced at +0x%llx, CreateBuffer at +0x%llx, and "
-           "CreatePixelShader at +0x%llx, Draw at +0x%llx, PrepareDraw at +0x%llx "
+           "CreatePixelShader at +0x%llx, Draw at +0x%llx, PrepareDraw at +0x%llx, "
+           "CreateShaderResourceView at +0x%llx "
            "intercepted (read-only; originals run)\n",
            (unsigned long long)indexed, (unsigned long long)instanced,
            (unsigned long long)create_buffer,
            (unsigned long long)pixel_shader,
            (unsigned long long)draw,
-           (unsigned long long)prepare);
+           (unsigned long long)prepare,
+           (unsigned long long)srv);
 }
 
 /* G3PATCH2 (patches.py): the patches' image base, then byte writes at image offsets, applied
