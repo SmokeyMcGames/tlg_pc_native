@@ -18,11 +18,15 @@
 
 namespace TlgNativeVk {
 
+enum class NativePipelineKind : std::uint8_t {
+    None, Graphics, Compute
+};
 struct NativeResource {
     std::uint64_t vk_handle = 0;
     std::uint64_t generation = 0;
     std::uint64_t capacity = 0;  // index elements for buffers
     std::uint64_t write_epoch = 0;
+    NativePipelineKind pipeline_kind = NativePipelineKind::None;
 };
 
 struct NativeContextState {
@@ -52,7 +56,23 @@ public:
     // Backend-created Vulkan handles ONLY. Update invalidates all bound
     // snapshots referencing an older generation of this guest object.
     bool RegisterPipeline(std::uint64_t guest, std::uint64_t vk_handle) {
-        return Register(pipelines_, guest, vk_handle, 0);
+        return Register(pipelines_, guest, vk_handle, 0,
+                        NativePipelineKind::Graphics);
+    }
+    bool RegisterComputePipeline(std::uint64_t guest, std::uint64_t vk_handle) {
+        return Register(pipelines_, guest, vk_handle, 0,
+                        NativePipelineKind::Compute);
+    }
+    // Handle lookup does not imply descriptor/barrier readiness; callers
+    // must separately validate compute resource dependencies before dispatch.
+    bool LookupComputePipeline(std::uint64_t guest, std::uint64_t& out) const {
+        std::scoped_lock lock{mutex_};
+        const auto it = pipelines_.find(guest);
+        if (it == pipelines_.end() ||
+            it->second.pipeline_kind != NativePipelineKind::Compute)
+            return false;
+        out = it->second.vk_handle;
+        return out != 0;
     }
     bool RegisterIndexBuffer(std::uint64_t guest, std::uint64_t vk_handle,
                              std::uint64_t indices) {
@@ -76,6 +96,7 @@ public:
         const auto t = targets_.find(targets);
         if (p == pipelines_.end() || i == buffers_.end() ||
             t == targets_.end() ||
+            p->second.pipeline_kind != NativePipelineKind::Graphics ||
             index_binding_base > i->second.capacity)
             return false;
         contexts_[context] = {
@@ -129,6 +150,7 @@ public:
         if (p == pipelines_.end() || i == buffers_.end() ||
             t == targets_.end() ||
             p->second.generation != c.pipeline_generation ||
+            p->second.pipeline_kind != NativePipelineKind::Graphics ||
             i->second.generation != c.index_generation ||
             t->second.generation != c.target_generation ||
             i->second.write_epoch > c.barrier_epoch)
@@ -162,10 +184,11 @@ public:
 private:
     using Table = std::unordered_map<std::uint64_t, NativeResource>;
     bool Register(Table& table, std::uint64_t guest, std::uint64_t handle,
-                  std::uint64_t capacity) {
+                  std::uint64_t capacity,
+                  NativePipelineKind pipeline_kind = NativePipelineKind::None) {
         if (!guest || !handle) return false;
         std::scoped_lock lock{mutex_};
-        table[guest] = {handle, ++generation_, capacity, 0};
+        table[guest] = {handle, ++generation_, capacity, 0, pipeline_kind};
         return true;
     }
     void Remove(Table& table, std::uint64_t guest) {
