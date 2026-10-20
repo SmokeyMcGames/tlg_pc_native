@@ -128,13 +128,40 @@ bool TriangleSmoke::RecordOnce() {
     // Vulkan forbids changing an attachment image's layout while another
     // dynamic rendering instance is active. End the guest's current pass first.
     state_->scheduler.EndRendering();
-    if (!state_->resources.RecordColorAttachmentTransition(SmokeTargetId, state_->scheduler))
+    if (!state_->resources.RecordColorAttachmentTransition(SmokeTargetId, state_->scheduler) ||
+        !state_->resources.RecordIndexReadBarrier(SmokeIndexId, state_->scheduler))
         return false;
-    const auto pipeline = state_->pipeline;
+
+    // End-to-end semantic Js draw -> native Vulkan registry -> VkDrawIndexed.
+    // No Gnm or PM4 code participates in these draw arguments or bindings.
+    if (!state_->registry.Bind(SmokeContextId, SmokePipelineId, SmokeIndexId,
+                               SmokeTargetId, 0, 0) ||
+        !state_->registry.AcknowledgeBarriers(SmokeContextId, 1))
+        return false;
+    const TlgJsNativeCommand semantic{
+        .ready = 1, .kind = TLG_JS_NATIVE_INDEXED,
+        .context = SmokeContextId,
+        .arg0 = 3, .arg1 = 0, .arg2 = 0,
+    };
+    TlgJsNativeDrawCandidate requested{};
+    TlgNativeVk::NativeBoundDraw resolved{};
+    if (!tlg_js_native_decode_draw(&semantic, &requested) ||
+        !state_->registry.TryResolve(requested, resolved))
+        return false;
+    VkPipeline raw_pipeline = VK_NULL_HANDLE;
+    VkBuffer raw_indices = VK_NULL_HANDLE;
+    static_assert(sizeof(raw_pipeline) == sizeof(resolved.pipeline));
+    static_assert(sizeof(raw_indices) == sizeof(resolved.index_buffer));
+    std::memcpy(&raw_pipeline, &resolved.pipeline, sizeof(raw_pipeline));
+    std::memcpy(&raw_indices, &resolved.index_buffer, sizeof(raw_indices));
+    const vk::Pipeline pipeline{raw_pipeline};
+    const vk::Buffer indices{raw_indices};
+    const TlgNativeVk::Draw draw = resolved.command;
     const auto color = state_->color_view;
     const auto native_image = vk::Image{state_->color_image};
     const auto staging = vk::Buffer{state_->readback_buffer};
-    state_->scheduler.Record([pipeline,color,native_image,staging](vk::CommandBuffer cmd) {
+    state_->scheduler.Record([pipeline,indices,draw,color,native_image,staging]
+                              (vk::CommandBuffer cmd) {
         const vk::RenderingAttachmentInfo attachment{
             .imageView=color,
             .imageLayout=vk::ImageLayout::eColorAttachmentOptimal,
@@ -151,13 +178,14 @@ bool TriangleSmoke::RecordOnce() {
             .pColorAttachments=&attachment,
         };
         cmd.beginRendering(pass);
-        cmd.bindPipeline(vk::PipelineBindPoint::eGraphics,pipeline);
+        cmd.bindIndexBuffer(indices, 0, vk::IndexType::eUint16);
         cmd.setViewport(0, vk::Viewport{
             .width=float(SmokeSize.width),.height=float(SmokeSize.height),
             .minDepth=0.0f,.maxDepth=1.0f,
         });
         cmd.setScissor(0, vk::Rect2D{.extent=SmokeSize});
-        cmd.draw(3,1,0,0);
+        TlgNativeVk::EmitGraphicsDraw(cmd, vk::PipelineBindPoint::eGraphics,
+                                      pipeline, vk::Pipeline{}, draw);
         cmd.endRendering();
 
         // Native Vulkan Sync2 image transition: color-write -> copy source.
@@ -234,7 +262,7 @@ bool TriangleSmoke::RecordOnce() {
     // outputs (uv.x, uv.y, 0.25, 1). Tolerance allows rasterization rounding.
     const bool pass = r >= 90 && r <= 165 && g >= 90 && g <= 165 &&
                       b >= 50 && b <= 85 && a >= 250;
-    std::printf("Native Vulkan triangle GPU readback: %s "
+    std::printf("Native Vulkan registry-indexed triangle GPU readback: %s "
                 "(center RGBA %u,%u,%u,%u; expected roughly 128,128,64,255)\n",
                 pass ? "PASS" : "FAIL", unsigned(r), unsigned(g),
                 unsigned(b), unsigned(a));
