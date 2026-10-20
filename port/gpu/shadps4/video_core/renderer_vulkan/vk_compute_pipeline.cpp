@@ -19,6 +19,29 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
       compute_key{compute_key_} {
     auto& info = stages[int(Shader::SwStage::Compute)];
     info = &info_;
+
+    // Vulkan-native compute operations (copy/clear) use a pipeline-specific static
+    // recipe, while buffer addresses, formats, sizes and aliasing are STILL checked
+    // on every execution by Rasterizer::IsComputeImage{Copy,Clear}/IsComputeMetaClear.
+    // This only avoids repeating impossible pattern checks for other compute shaders.
+    if (info->images.empty() && info->buffers.size() == 2) {
+        const auto& a = info->buffers[0];
+        const auto& b = info->buffers[1];
+        if (a.is_formatted && b.is_formatted && a.is_written != b.is_written) {
+            native_candidates |= ImageCopy;
+        }
+        if (!a.is_formatted && b.is_formatted && !a.is_written && b.is_written) {
+            native_candidates |= ImageClear;
+        }
+    }
+    if (!info->has_bitwise_xor) {
+        for (const auto& buffer : info->buffers) {
+            if (!buffer.IsSpecial() && buffer.is_written) {
+                native_candidates |= MetaClear;
+                break;
+            }
+        }
+    }
     const auto debug_str = GetDebugString();
 
     const vk::PipelineShaderStageRequiredSubgroupSizeCreateInfo subgroup_size_ci = {
