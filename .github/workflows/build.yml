@@ -58,6 +58,12 @@ jobs:
           bash packaging/linux/build_deps.sh
       - name: Build
         run: TLG_LTO=OFF TLG_PGO=off bash build.sh
+      - name: Experimental native renderer and FPS regression tests
+        run: |
+          python3 -m unittest discover -s tests -p 'test_tlg_patches.py'
+          python3 -m unittest discover -s tests -p 'test_native_launcher.py'
+          ninja -C out/gpu native-draw-bridge-test
+          TLG_NATIVE_DRAW_BRIDGE=1 ./out/gpu/native-draw-bridge-test
       - name: Package
         run: bash packaging/linux/package.sh
       - uses: actions/upload-artifact@v4
@@ -101,6 +107,12 @@ jobs:
         run: |
           export MSYS2_ROOT=$(cygpath -u "$MSYS2_ROOT")
           TLG_LTO=OFF bash build.sh
+      - name: Experimental native renderer and FPS regression tests
+        run: |
+          python -m unittest discover -s tests -p 'test_tlg_patches.py'
+          python -m unittest discover -s tests -p 'test_native_launcher.py'
+          ninja -C out/gpu native-draw-bridge-test
+          TLG_NATIVE_DRAW_BRIDGE=1 ./out/gpu/native-draw-bridge-test.exe
       - name: Package
         env:
           MSYS2_ROOT: ${{ runner.temp }}/msys64
