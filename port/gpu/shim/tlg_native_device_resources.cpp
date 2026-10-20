@@ -52,6 +52,18 @@ struct DeviceResources::State {
         std::uint32_t format = 0;
         vk::ImageLayout layout = vk::ImageLayout::eUndefined;
     };
+    struct SampledTexture {
+        VkImage gpu = VK_NULL_HANDLE;
+        VmaAllocation allocation = VK_NULL_HANDLE;
+        vk::UniqueImageView view{};
+        VkBuffer staging = VK_NULL_HANDLE;
+        VmaAllocation staging_allocation = VK_NULL_HANDLE;
+        std::uint32_t width = 0, height = 0;
+        NativeTextureTransition state{};
+    };
+    struct NativeSampler {
+        vk::UniqueSampler handle{};
+    };
     std::mutex mutex;
     std::unordered_map<std::uint64_t, std::unique_ptr<GraphicsPipeline>> pipelines;
     std::unordered_map<std::uint64_t, std::unique_ptr<GraphicsPipeline>> compute_pipelines;
@@ -62,7 +74,23 @@ struct DeviceResources::State {
     std::vector<Buffer> retired;
     std::unordered_map<std::uint64_t, std::unique_ptr<ColorTarget>> color_active;
     std::vector<std::unique_ptr<ColorTarget>> color_retired;
+    std::unordered_map<std::uint64_t, std::unique_ptr<SampledTexture>> sampled_textures;
+    std::vector<std::unique_ptr<SampledTexture>> sampled_retired;
+    std::unordered_map<std::uint64_t, std::unique_ptr<NativeSampler>> native_samplers;
+    std::vector<std::unique_ptr<NativeSampler>> samplers_retired;
 
+    void Destroy(SampledTexture& texture) {
+        texture.state.Retire();
+        texture.view.reset();
+        if (texture.staging != VK_NULL_HANDLE)
+            vmaDestroyBuffer(allocator, texture.staging, texture.staging_allocation);
+        if (texture.gpu != VK_NULL_HANDLE)
+            vmaDestroyImage(allocator, texture.gpu, texture.allocation);
+        texture.staging = VK_NULL_HANDLE;
+        texture.gpu = VK_NULL_HANDLE;
+        texture.staging_allocation = VK_NULL_HANDLE;
+        texture.allocation = VK_NULL_HANDLE;
+    }
     void Destroy(ColorTarget& image) {
         // VkImageView depends on VkImage; release the view first.
         image.view.reset();
@@ -106,6 +134,14 @@ DeviceResources::~DeviceResources() {
         state_->Destroy(*target);
     }
     state_->color_active.clear();
+    for (auto& [id, texture] : state_->sampled_textures) {
+        state_->registry.UnregisterSampledImage(id);
+        state_->Destroy(*texture);
+    }
+    state_->sampled_textures.clear();
+    for (auto& [id, sampler] : state_->native_samplers)
+        state_->registry.UnregisterSampler(id);
+    state_->native_samplers.clear();
 }
 
 bool DeviceResources::CreateComputePipeline(
@@ -761,5 +797,8 @@ void DeviceResources::CollectRetiredAfterIdle() {
     for (auto& image : state_->color_retired) state_->Destroy(*image);
     state_->color_retired.clear();
     state_->pipelines_retired.clear();
+    for (auto& texture : state_->sampled_retired) state_->Destroy(*texture);
+    state_->sampled_retired.clear();
+    state_->samplers_retired.clear();
 }
 } // namespace TlgNativeVk
